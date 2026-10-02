@@ -12,6 +12,7 @@ from scipy.spatial.transform import Rotation as R
 
 from cube_wall import (compute_signed_distance, canonicalize_quaternion, z_touch, CUBE_VERTICES,
                        to_canonical, from_canonical, classify_sd, is_far)
+import cube_wall as cw
 
 SEED = 20261003
 
@@ -271,6 +272,77 @@ class TestInvariances(unittest.TestCase):
         for r in self.rots:
             q = _wxyz(r)
             self.assertAlmostEqual(compute_signed_distance(q, 0.77), 0.77 - z_touch(q), places=12)
+
+
+class TestZonesRev3(unittest.TestCase):
+    """R01.11, R01.12, R01.13 (rev 3)"""
+
+    def test_shape_constants(self):
+        self.assertAlmostEqual(cw.R_CIRCUMSCRIBED, math.sqrt(3) / 2, places=15)
+        self.assertEqual(cw.H_MIN, 0.5)
+        self.assertAlmostEqual(cw.Z_PREFILTER, math.sqrt(3) / 2 + 0.1, places=15)
+        self.assertAlmostEqual(cw.SD_COVER_MAX, cw.Z_PREFILTER - cw.H_MIN, places=15)
+        self.assertAlmostEqual(cw.SD_COVER_MAX, 0.4660254037844386, places=12)
+
+    def test_zone_boundaries(self):
+        self.assertEqual(cw.classify_zone(-0.1000001), "too_deep")
+        self.assertEqual(cw.classify_zone(-0.1), "accuracy")
+        self.assertEqual(cw.classify_zone(0.1), "accuracy")
+        self.assertEqual(cw.classify_zone(0.1000001), "gap_safety")
+        self.assertEqual(cw.classify_zone(cw.SD_COVER_MAX), "gap_safety")
+        self.assertEqual(cw.classify_zone(cw.SD_COVER_MAX + 1e-9), "beyond")
+
+    def test_no_unseen_inputs(self):
+        rng = np.random.default_rng(SEED)
+        for r in R.random(3000, random_state=SEED):
+            z = rng.uniform(0.0, cw.Z_PREFILTER)
+            if not cw.is_far(z):
+                sd = compute_signed_distance(_wxyz(r), z)
+                self.assertNotEqual(cw.classify_zone(sd), "beyond")
+
+    def test_cover_max_attained_face_down(self):
+        sd = compute_signed_distance([1.0, 0.0, 0.0, 0.0], cw.Z_PREFILTER)
+        self.assertAlmostEqual(sd, cw.SD_COVER_MAX, places=15)
+
+    def test_beyond_only_above_prefilter(self):
+        # beyond zone implies the pre-filter fires
+        rng = np.random.default_rng(SEED + 1)
+        for r in R.random(2000, random_state=SEED + 1):
+            z = rng.uniform(0.0, 2.0)
+            if cw.classify_zone(compute_signed_distance(_wxyz(r), z)) == "beyond":
+                self.assertTrue(cw.is_far(z))
+
+
+class TestSupportHeightRev3(unittest.TestCase):
+    """R01.16"""
+
+    def test_matches_cube_reference(self):
+        for r in R.random(500, random_state=SEED):
+            q = _wxyz(r)
+            self.assertAlmostEqual(cw.support_height(CUBE_VERTICES, q), z_touch(q), places=14)
+
+    def test_interior_points_do_not_change_h(self):
+        rng = np.random.default_rng(SEED)
+        interior = rng.uniform(-0.45, 0.45, (50, 3))
+        pts = np.vstack([CUBE_VERTICES, interior])
+        for r in R.random(200, random_state=SEED):
+            q = _wxyz(r)
+            self.assertEqual(cw.support_height(pts, q), cw.support_height(CUBE_VERTICES, q))
+
+    def test_non_convex_point_set(self):
+        # L-shaped (non-convex) set: h comes from its hull vertices
+        pts = np.array([[0, 0, 0], [2, 0, 0], [2, 1, 0], [1, 1, 0], [1, 2, 0], [0, 2, 0]], float) - [0.75, 0.75, 0]
+        q = [1.0, 0.0, 0.0, 0.0]
+        r = R.from_euler("x", 90, degrees=True)  # body y -> world z
+        qx = _wxyz(r)
+        # lowest world z = min over points of body y = -0.75
+        self.assertAlmostEqual(cw.support_height(pts, qx), 0.75, places=14)
+        self.assertAlmostEqual(cw.support_height(pts, q), 0.0, places=14)
+
+    def test_invalid_points_rejected(self):
+        for bad in (np.zeros((0, 3)), np.zeros((3, 2)), np.array([[np.nan, 0, 0]])):
+            with self.assertRaises(ValueError):
+                cw.support_height(bad, [1.0, 0.0, 0.0, 0.0])
 
 
 if __name__ == "__main__":

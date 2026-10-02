@@ -2,6 +2,11 @@
 
 ## Status
 
+**Revision 3, 2026-10-03: amendment APPROVED by the user** ("ok" to: R01.16
+convex hull generalisation; no unseen inputs (R01.11, R01.12, R01.13); sign
+safety (R01.17); continuity (R01.18)). Changes of revision 3 are marked
+*[rev 3]*.
+
 **Revision 2, 2026-10-03. APPROVED by the user (2026-10-03, "ok" after
 review of the implemented revision).** Earlier acceptance to proceed (user replies:
 L is the characteristic length; near-contact and out-of-range proposals,
@@ -118,32 +123,54 @@ training (spec 03), or evaluation (spec 04).
 
 - One fixed cube shape, one fixed plane. No generalization across shapes or walls.
 
-### R01.11 Signed distance range *[changed]*
+### R01.11 Signed distance range *[changed, rev 3]*
 
 - Penetration range covered: `[-0.1, 0)` canonical units (up to 10% of the
   edge length). *Confirmed (user):* overlaps up to `1e-1` must be covered.
   Previous value was `-0.5`.
-- Gap range covered: `(0, 0.1]` canonical units.
+- **Accuracy zone:** `-0.1 <= sd <= 0.1`. The accuracy requirement R01.15
+  applies here.
+- **Gap safety zone** *[rev 3]*: `0.1 < sd <= SD_COVER_MAX`, where
+  `SD_COVER_MAX = Z_PREFILTER - H_MIN` (R01.13) is the largest `sd` of any
+  query that is not pre-filtered. For the cube
+  `SD_COVER_MAX = sqrt(3)/2 + 0.1 - 0.5 ≈ 0.4660`. The sign-safety
+  requirement R01.17 applies here; R01.15 does not.
 - **Near-contact band** `|sd| < 1e-5`: part of the covered range. Every
   contact passes through it, so spec 02 samples it explicitly (density
   defined there).
+- **No unseen inputs** *[rev 3]*: every query that reaches the model (not
+  pre-filtered, R01.13) lies in the covered range
+  `[-0.1, SD_COVER_MAX]`, except `too_deep` queries (R01.13). Training data
+  must cover this whole range.
 
-### R01.12 Position range *[changed]*
+### R01.12 Position range *[changed, rev 3]*
 
-- For a given orientation, `position_z` ranges from `g(q) + 0.1` (gap) down
-  to `g(q) - 0.1` (penetration).
+- For a given orientation `q`, the covered `position_z` range is
+  `g(q) - 0.1 <= position_z <= Z_PREFILTER` (R01.13). In terms of `sd`:
+  `-0.1 <= sd <= Z_PREFILTER - g(q)`, which is at most `SD_COVER_MAX`.
 
-### R01.13 Out-of-range queries *[new]*
+### R01.13 Query zones and pre-filter *[new, changed rev 3]*
 
-- A query is classified by its exact `sd` (reference) as `far` if
-  `sd > 0.1`, `too_deep` if `sd < -0.1`, else `in_range`.
-- **Shape-general pre-filter:** if canonical `position_z > R_circ + 0.1`,
-  where `R_circ = sqrt(3)/2` is the circumscribed-sphere radius, then
-  `sd > 0.1` for every orientation, so the query is `far` (no contact)
-  without running the model.
-- A `too_deep` query is outside the trained range: it is reported, never
-  silently clamped. The reporting mechanism for the surrogate is defined in
-  spec 03/06.
+- **Shape constants** (canonical units):
+  - `R_CIRC`: circumscribed-sphere radius about the centre
+    (cube: `sqrt(3)/2`).
+  - `H_MIN`: smallest value of `g(q)` over all orientations (cube: `0.5`,
+    face-down).
+  - `Z_PREFILTER = R_CIRC + 0.1`.
+  - `SD_COVER_MAX = Z_PREFILTER - H_MIN` (cube: `≈ 0.4660`).
+- **Pre-filter** (uses only runtime inputs): if canonical
+  `position_z > Z_PREFILTER`, the query is "no contact" and the model is not
+  evaluated. This is safe: then `sd > Z_PREFILTER - g(q) >= 0.1` for every
+  orientation.
+- **Zones** of a query, by its exact `sd` (used for training-data coverage and
+  for evaluation):
+  - `too_deep`: `sd < -0.1`. Outside the trained range. Reported, never
+    silently clamped. The surrogate's reporting mechanism is defined in spec
+    03/06.
+  - `accuracy`: `-0.1 <= sd <= 0.1` (R01.15).
+  - `gap_safety`: `0.1 < sd <= SD_COVER_MAX` (R01.17).
+  - `beyond`: `sd > SD_COVER_MAX`. Only reachable above `Z_PREFILTER`, so
+    always pre-filtered.
 
 ### R01.14 Reference solution and invariances *[new]*
 
@@ -173,9 +200,45 @@ surrogate is tested against them within a tolerance given by R01.15.
 - The cube is a testbed for the surrogate method. The exact cube solution is
   the permanent reference baseline; every surrogate error is reported
   against it.
-- Design choices in later specs should rely only on structure shared with
-  other convex shapes (the support function on the body-frame direction
-  `u = R(q)^T e_z`), not on cube-specific closed forms.
+- *[rev 3]* *Confirmed (user):* the target shapes are arbitrary, given as an
+  STL surface or a point set, and may be non-convex.
+- *[rev 3]* For any rigid shape against a plane, `sd = position_z - h(q)`,
+  where `h(q) = max_v (v . u)` is the support function of the shape's
+  **convex hull** in the body-frame direction pointing towards the wall,
+  `u = -R(q)^T e_z` (the maximum is over hull vertices `v`; the lowest point
+  of any shape is a hull vertex). This holds for non-convex shapes too. For
+  the cube, `h = g`.
+- Design choices in later specs should rely only on this shape-general
+  structure (point set or hull, support function, `R_CIRC`, `H_MIN`), not on
+  cube-specific closed forms.
+
+### R01.17 Sign safety *[new, rev 3]*
+
+- Applies to the surrogate, for all queries that reach the model.
+- A query with exact `sd > DELTA_SIGN` must not be predicted as contact
+  (`sd_pred < 0`), and a query with exact `sd < -DELTA_SIGN` must not be
+  predicted as gap.
+- Reported metrics: false-contact rate, missed-contact rate, and the largest
+  spurious overlap (largest `-sd_pred` over queries with exact
+  `sd > DELTA_SIGN`).
+- *[OPEN, user, after baseline]* `DELTA_SIGN` and the acceptable rates are not
+  fixed. They are set by the user after the baseline (spec 04).
+
+### R01.18 Continuity *[new, rev 3]*
+
+- Applies to the surrogate.
+- **Sign invariance:** the prediction for `q` and `-q` is identical (within
+  floating-point round-off), whatever the canonicalization. Reason
+  (*Confirmed*, measured): on a continuous tumbling path of 20000 steps of
+  about 1 mrad, the canonical quaternion of R01.4 jumped 3 times, so a
+  prediction that depends on the quaternion sign jumps along a continuous
+  motion.
+- **Path continuity:** along a continuous pose path sampled at small steps,
+  the change of the prediction between consecutive steps is bounded by the
+  change of the exact `sd` plus a tolerance.
+- *[OPEN, user, after baseline]* The path-continuity tolerance is set after
+  the baseline (spec 04). How the model meets R01.18 is a spec 03 design
+  choice.
 
 ## Numerical and physical requirements
 
@@ -189,6 +252,10 @@ surrogate is tested against them within a tolerance given by R01.15.
 - `qw == 0` (180-degree rotations): two quaternion signs for one orientation.
 - Zero-norm or non-finite quaternion: rejected (R01.4).
 - Non-unit quaternion: normalized (R01.4).
+- *[rev 3]* Queries just below `Z_PREFILTER`: largest reachable gap
+  (`SD_COVER_MAX` for face-down).
+- *[rev 3]* Continuous rotation through `qw = 0`: the canonical quaternion
+  changes sign (R01.18).
 
 ## Out of scope
 
@@ -200,6 +267,8 @@ surrogate is tested against them within a tolerance given by R01.15.
 
 - The reference implementation and tests cover R01.4, R01.5, R01.7, R01.13,
   R01.14.
+- *[rev 3]* R01.17 and R01.18 are surrogate requirements; their metrics are
+  implemented in spec 04.
 - The contract smoke test passes and is reported as a smoke test, not as a
   scientific result.
 - The user approves this spec.
@@ -210,3 +279,5 @@ surrogate is tested against them within a tolerance given by R01.15.
 - Which LIGGGHTS size parameter maps to `L_actual`? (integration project)
 - Numeric accuracy tolerance (R01.15), to be set by the user after the
   baseline.
+- `DELTA_SIGN`, acceptable sign-error rates (R01.17) and path-continuity
+  tolerance (R01.18), to be set by the user after the baseline.

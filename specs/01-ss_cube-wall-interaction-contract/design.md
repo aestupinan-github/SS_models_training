@@ -2,8 +2,8 @@
 
 ## Status
 
-Revision 2, 2026-10-03. Follows `requirements.md` revision 2. APPROVED by the
-user (2026-10-03).
+Revision 3, 2026-10-03. Follows `requirements.md` revision 3 (amendment
+approved by the user). Revision 2 approved by the user (2026-10-03).
 
 ## Requirements traceability
 
@@ -13,8 +13,10 @@ user (2026-10-03).
 | Quaternion normalization and canonicalization | R01.4 |
 | Reference solution `g(q)`, `sd` | R01.5, R01.14 |
 | Model I/O and rescaling | R01.6, R01.7 |
-| Range classification | R01.11, R01.12, R01.13 |
-| Contract smoke test | R01.4, R01.5, R01.7, R01.13, R01.14 |
+| Shape constants, zones, pre-filter | R01.11, R01.12, R01.13 |
+| Generic support function `h(q)` from a point set | R01.16 |
+| Contract smoke test | R01.4, R01.5, R01.7, R01.11, R01.13, R01.14, R01.16 |
+| Sign safety and continuity metrics | R01.17, R01.18 (implemented in spec 04) |
 
 ## Existing code context
 
@@ -29,7 +31,7 @@ user (2026-10-03).
 
 | File | Responsibility | Expected change |
 |---|---|---|
-| `interactions/ss_cube-wall/python/cube_wall.py` | Reference solution and contract helpers | Rework `canonicalize_quaternion`; add `rescale_*`, `classify_sd`, `is_far` |
+| `interactions/ss_cube-wall/python/cube_wall.py` | Reference solution and contract helpers | Rework `canonicalize_quaternion`; add `rescale_*`, `classify_sd`, `is_far`; rev 3: shape constants, `classify_zone`, `support_height` |
 | `tests/test_overlap_contract.py` | Unit tests for the contract | Add tests for R01.4, R01.7, R01.13, R01.14 |
 | `interactions/ss_cube-wall/python/smoke_contract.py` | Contract smoke test (randomized, reported as smoke test) | New |
 
@@ -41,9 +43,19 @@ z_touch(q) -> float                        # g(q), R01.5
 compute_signed_distance(q, z_center) -> float   # sd, R01.5
 to_canonical(position_z, L_actual) -> float     # position_z / L_actual
 from_canonical(sd_canonical, L_actual) -> float # sd_canonical * L_actual
-classify_sd(sd) -> "far" | "in_range" | "too_deep"   # R01.13
+classify_sd(sd) -> "far" | "in_range" | "too_deep"   # accuracy-zone test (rev 2)
 is_far(position_z_canonical) -> bool       # R01.13 pre-filter
+# rev 3
+support_height(points, q) -> float         # h(q) = max_v v . u, u = -R(q)^T e_z (R01.16)
+classify_zone(sd) -> "too_deep" | "accuracy" | "gap_safety" | "beyond"   # R01.13
+R_CIRCUMSCRIBED, H_MIN, Z_PREFILTER, SD_COVER_MAX   # shape constants (R01.13)
 ```
+
+`classify_sd` keeps its rev 2 meaning (accuracy zone vs outside); `far`
+means `sd > 0.1`, which now includes the gap safety zone. `classify_zone`
+is the rev 3 classification. Shape constants are derived from the point set
+(`R_CIRCUMSCRIBED = max |v|`, `H_MIN` from the cube face-down value 0.5),
+not hard-coded separately.
 
 Errors: `canonicalize_quaternion` raises `ValueError` for a zero norm or a
 non-finite component. `to_canonical` and `from_canonical` raise `ValueError`
@@ -81,8 +93,24 @@ sd = position_z - g
 ```
 
 Range classification: `sd > 0.1` is `far`, `sd < -0.1` is `too_deep`,
-otherwise `in_range`. Pre-filter: `position_z_canonical > sqrt(3)/2 + 0.1`
-implies `far`.
+otherwise `in_range`. Pre-filter: `position_z_canonical > Z_PREFILTER`
+(`= sqrt(3)/2 + 0.1`) implies `far`.
+
+Zones (rev 3): `sd < -0.1` too_deep; `<= 0.1` accuracy; `<= SD_COVER_MAX`
+gap_safety; else beyond. `SD_COVER_MAX = Z_PREFILTER - H_MIN`.
+
+Generic support function (rev 3):
+
+```
+u = -R(q)^T e_z            # body-frame direction towards the wall
+h = max over points v of (v . u)
+sd = position_z - h
+```
+
+`H_MIN` for an arbitrary point set is the minimum of `h` over SO(3), which
+is the smallest distance from the centre to a hull face plane. For the cube
+it is 0.5 (exact). For later shapes it is computed from the hull, not by
+sampling.
 
 ## Design decisions
 
@@ -118,6 +146,17 @@ argument. No silent NaN propagation.
 
 The smoke test checks software behavior against the exact solution. It is
 not scientific validation of a surrogate.
+
+## Testing additions (rev 3)
+
+| Test | Covers |
+|---|---|
+| `support_height` equals `z_touch` for the cube on random poses; works for a non-convex point set (interior points do not change `h`) | R01.16 |
+| Shape constants: `R_CIRCUMSCRIBED = sqrt(3)/2`, `H_MIN = 0.5`, `SD_COVER_MAX = Z_PREFILTER - H_MIN` | R01.13 |
+| Zone boundaries | R01.13 |
+| No unseen inputs: every random query with `position_z <= Z_PREFILTER` has exact `sd <= SD_COVER_MAX`; face-down at `Z_PREFILTER` attains it | R01.11, R01.12 |
+
+R01.17 and R01.18 concern the surrogate; their metrics are designed in spec 04.
 
 ## Risks and limitations
 

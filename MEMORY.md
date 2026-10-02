@@ -23,16 +23,27 @@
   numerically at z = 0.7).
 - **The cube is a testbed (Confirmed, user)** for the surrogate method,
   not the production target. The exact cube solution stays as the permanent
-  reference baseline; all errors are reported against it. Design choices
-  should carry over to other shapes.
-- Overlap range to cover: up to 1e-1 = 10% of the edge length L (Confirmed,
-  user), so penetration range becomes `[-0.1, -1e-5]` (spec change pending).
+  reference baseline; all errors are reported against it.
+- **Target shapes (Confirmed, user):** arbitrary shapes given as an STL
+  surface or a point set, possibly non-convex. Design must be shape-general.
+- **Approach (Confirmed, user):** a fully trained model is the primary
+  approach (more value for the paper). Embedding the shape (vertices) in the
+  model is a fallback if the required accuracy is not reached.
+- For any rigid shape against a plane: `sd = position_z - h(q)`,
+  `h(q) = max_v v . u`, `u = -R(q)^T e_z`, over the convex-hull vertices
+  (checked numerically; equals `z_touch` for the cube). Non-convexity does
+  not change `sd` for wall interactions.
+- Overlap range: up to 1e-1 = 10% of the edge length L (Confirmed, user).
+  Lower bound of the near-contact band: `|sd| = 1e-5` for now (Confirmed,
+  user); finer accuracy is a later concern with contact point/normal.
+- Runtime cost depends on network size, not on training-data size
+  (measured: about 50-100 us per single TorchScript query on CPU for 9k-265k
+  parameters).
 - Model input: `[position_z, qw, qx, qy, qz]` (5 features).
 - Model output: signed distance only (single scalar, no contact head).
 - Each model is configuration-specific: one fixed shape, one fixed plane.
 - Train at canonical size L = 1 (edge length 1, half-size 0.5). At query
-  time, scale input z and output signed distance by the particle size.
-  (The exact rescale rule is under revision, see open questions.)
+  time: `z / L_actual` in, `sd * L_actual` out (spec 01).
 - `inspired_codes/` holds prior reference scripts. Inspiration only, partly
   unfinished, not imported at runtime, to be reviewed later.
 - Code that exists: `interactions/ss_cube-wall/python/cube_wall.py`
@@ -52,21 +63,17 @@
 ## Current scope and status
 
 - Phase 0: scaffold, constitution, specs 00-06 written.
-- Phase 1: spec 01 revision 2 complete (requirements, design, tasks T01.10-
-  T01.14 done, tests and smoke test pass). **Spec 01 APPROVED by the user
-  (2026-10-03).** Reference solution now implements: quaternion normalization
-  and `qw == 0` tie-break, rejection of invalid input, rescale helpers,
-  range classification and pre-filter. Smoke test
-  (`smoke_contract.py`) passes; it was checked to fail under two deliberate
-  mutations. It is a software check, not a scientific result.
-- Spec 02 (data generation), 03 (training), 04 (evaluation), 06 (C++) are
-  still revision 1 and must be re-reviewed with the new context before
-  implementation (Option B target, range 0.1, density, no clamp).
-- Pending spec revisions (from the review): spec 02 (critical set via
-  `u = R^T e_z`, near-face tilt sampling, near-contact band, counts, seeding,
-  dtype, provenance), spec 03 (replace transform, orientation-based split,
-  Option B), spec 04 (define off-anchor, tolerances, invariance tests), spec
-  06, `.gitignore`/`.gitkeep` (A5).
+- Phase 1: **spec 01 revision 3 approved and implemented** (2026-10-03).
+  54 unit tests and the 17-check contract smoke test pass. Rev 3 added: zones
+  and shape constants (`Z_PREFILTER`, `SD_COVER_MAX ≈ 0.466`, no unseen
+  inputs below the pre-filter), shape-general `support_height`, sign safety
+  (R01.17) and continuity (R01.18) as surrogate requirements.
+- Spec 02 (data generation): reviewed (41 findings), requirements being
+  redrafted. Spec 03, 04, 06: still revision 1, to be revised.
+- Pending: spec 03 (replace transform, Option B, orientation-based split,
+  learning-curve study, sign-invariant input, mini-batch training), spec 04
+  (off-anchor definition, invariance tests, tumbling-path test for
+  continuity and sign safety), spec 06, `.gitignore`/`.gitkeep`.
 
 ## Decisions and rationale
 
@@ -89,13 +96,6 @@
   for `|x| < 1` and jumps from about +15 to about -15 across contact. Spec 03
   (and spec 06 step 9, the `eps` scaler field) must be replaced with an
   invertible, monotone transform.
-- **Rescale rule.** Specs say divide z by the half-size. Canonical half-size
-  is 0.5, so this is wrong by a factor 2 for the canonical cube. The rule
-  must use the edge length L (= 2 x half-size).
-- **Quaternion convention.** `cube_wall.py` rotates body to world (active).
-  Spec must state this. Canonicalization needs a tie-break at `qw = 0`
-  (e.g. first nonzero component positive) and must state normalization and
-  invalid-input behavior.
 - **`.gitignore` and `.gitkeep`** do not cover `output/run_XXX/...`,
   `data/test_cases/...`, or `scalers.dat`.
 - **Observed facts (checked numerically):** `signed_distance = z - z_touch(q)`,
@@ -109,15 +109,15 @@
   investigated later. Contract must be independent of the answer: the
   rescale uses the edge length, and the integration project maps its size
   parameter to the edge length.
-- Learning target: user leans to Option B (network learns `g(q) = z_touch`,
-  model output `sd = z - g(q)`, so `z` enters exactly with slope 1). Not yet
-  formalised in a spec. Testbed status (above) means the design should use
-  only structure shared by other convex shapes (support function on the
-  sphere of body-frame directions), not cube-specific formulas.
-- Accuracy tolerances for the overlap (absolute `deltan` error near contact,
-  relative error for deep penetration). Not yet specified.
+- Learning target: user leans to Option B (network learns `h(q)`, model
+  output `sd = z - h(q)`, exact slope 1 in `z`, valid for any shape against
+  a plane). To be formalised in spec 03.
+- Dataset size: decided by a learning-curve study in spec 03 (Confirmed,
+  user), e.g. 1e5 / 1e6 / 1e7 rows with mini-batch training. Needs approval.
+- Accuracy tolerance (R01.15), sign-safety `DELTA_SIGN` and rates (R01.17),
+  path-continuity tolerance (R01.18): set by the user after a baseline.
 - Validation split by orientation (not by row); definition of "off-anchor".
-- Numeric precision (float32 vs float64) and out-of-range behavior.
+- Numeric precision of the surrogate (float32 vs float64).
 - C++ test details (spec 06): CMake+CTest is proposed in R06.4.
 - Optional later: export plain weights for LibTorch-free C++ evaluation
   (user open to exploring; not needed now since LibTorch works).
@@ -138,6 +138,13 @@
   project root.
 
 ## Recent changes
+
+
+- 2026-10-03: Spec 01 revision 3 (approved): R01.11-R01.13 no unseen inputs
+  (gap safety zone up to `SD_COVER_MAX`), R01.16 convex-hull generalisation
+  for any shape, new R01.17 sign safety, R01.18 continuity (canonical
+  quaternion jumps 3 times on a 20000-step tumbling path). Code: shape
+  constants, `classify_zone`, `support_height`. 54 tests, smoke 17/17.
 
 - 2026-10-03: Renamed `constitution.md` to `CONSTITUTION.md` (capitalised like `AGENTS.md`, `MEMORY.md`, to match the user's other projects and central custom commands). References updated in README, AGENTS, spec 00, `check_structure.py`, `tests/test_structure.py`.
 - 2026-10-02: Project scaffold created. Specs 00-06 written, reviewed, and revised.

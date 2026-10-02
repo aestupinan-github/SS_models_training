@@ -104,6 +104,18 @@ def main():
     far_bad = sum(1 for q, z_ in zip(qs, zz) if cw.is_far(z_) and cw.classify_sd(cw.compute_signed_distance(q, z_)) != "far")
     record("R01.13", "pre-filter never contradicts exact sd", [float(far_bad)], 0.0)
 
+    # R01.16 (rev 3): generic support height equals the cube reference
+    record("R01.16", "support_height(points, q) == g(q)",
+           [abs(cw.support_height(cw.CUBE_VERTICES, q) - gg) for q, gg in zip(qs, g)], 1e-14)
+
+    # R01.11/R01.12/R01.13 (rev 3): no unseen inputs below the pre-filter
+    zq = rng.uniform(0.0, cw.Z_PREFILTER, args.n)
+    unseen = sum(1 for q, z_ in zip(qs, zq)
+                 if not cw.is_far(z_) and cw.classify_zone(cw.compute_signed_distance(q, z_)) == "beyond")
+    record("R01.11", "no query below pre-filter is 'beyond'", [float(unseen)], 0.0)
+    record("R01.13", "face-down at Z_PREFILTER attains SD_COVER_MAX",
+           [abs(cw.compute_signed_distance([1, 0, 0, 0], cw.Z_PREFILTER) - cw.SD_COVER_MAX)], 1e-15)
+
     print("SMOKE TEST (not a scientific result): ss_cube-wall contract, n=%d, seed=%d" % (args.n, args.seed))
     failed = 0
     for req, desc, nf, nt, worst, tol in results:

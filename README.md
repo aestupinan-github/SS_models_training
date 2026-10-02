@@ -24,7 +24,7 @@ SS_models_training/
 
 | Interaction | Status |
 |---|---|
-| `ss_cube-wall` | Phase 1: spec 01 (contract) revised, implemented, approved |
+| `ss_cube-wall` | Phase 1: spec 01 (contract) rev 3 implemented and approved |
 
 ## Getting started
 
