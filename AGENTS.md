@@ -36,6 +36,12 @@ Do not start a later phase without explicit request.
   `ss_cube-ss_cube`, `ss_pyramid-wall`.
 - `ss_cube` is the shape type; `ss_cube-wall` is the interaction and folder.
 
+## Sign convention
+
+- Model predicts signed distance from shape's lowest vertex to wall.
+- Positive = gap (no contact), negative = penetration.
+- LIGGGHTS `deltan = signed_distance`.
+
 ## Pointers
 
 - `constitution.md` — durable principles.

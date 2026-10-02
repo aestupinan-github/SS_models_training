@@ -4,30 +4,32 @@
 
 ### R02.1 Reference solution
 
-- Exact analytical cube support function: rotate the 8 vertices by the quaternion, find `min_world_z`, `overlap = max(0, -min_world_z)`.
+- Exact analytical cube support function: rotate the 8 vertices by the quaternion, find `min_world_z`, `signed_distance = min_world_z`.
 - No geometric approximation.
 
 ### R02.2 Sampling strategy — hybrid
 
 Three components:
 
-1. **Log-uniform overlap targets** — pick target overlap values log-uniformly in `[1e-5, 0.5]`, invert the support function to find exact `position_z` for each target. Guarantees dense small-overlap coverage.
+1. **Log-uniform penetration targets** — pick target penetration values log-uniformly in `[1e-5, 0.5]`, invert the support function to find exact `position_z` for each target. Guarantees dense small-penetration coverage.
 2. **Critical orientations** — flat, principal (45/90/135/180° about x/y/z), corner-like (54.7356° about body diagonals), edge-like. Capture support-function topology.
 3. **Random orientations** — uniform random rotations, swept over z-trajectories.
 
 ### R02.3 Z-trajectory
 
 - For each orientation, compute `z_touch = -min(rotated_vertex_z)`.
-- Sample `position_z` from `z_touch` down to `z_touch - max_overlap`.
+- Penetration: sample `position_z` from `z_touch` down to `z_touch - 0.5`.
+- Gap: sample `position_z` from `z_touch` up to `z_touch + 0.1` (uniform).
 - Dense sampling near contact.
 
-### R02.4 Overlap range
+### R02.4 Signed distance range
 
-- `[1e-5, 0.5]` canonical units.
+- Penetration: `[-0.5, -1e-5]` canonical units.
+- Gap: `(0, 0.1]` canonical units.
 
 ### R02.5 Output format
 
-- CSV with columns: `position_z`, `Q_orientation.w()`, `Q_orientation.x()`, `Q_orientation.y()`, `Q_orientation.z()`, `overlap(m)`.
+- CSV with columns: `position_z`, `Q_orientation.w()`, `Q_orientation.x()`, `Q_orientation.y()`, `Q_orientation.z()`, `signed_distance(m)`.
 
 ### R02.6 Seeds
 

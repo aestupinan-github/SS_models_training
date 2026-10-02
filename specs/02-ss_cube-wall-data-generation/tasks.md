@@ -1,6 +1,6 @@
 # Spec 02 — Tasks
 
-- [ ] T02.1 Implement support-function inversion (log-uniform overlap targets)
+- [ ] T02.1 Implement support-function inversion (log-uniform penetration targets)
 - [ ] T02.2 Implement critical orientation set
 - [ ] T02.3 Implement random orientation sampling
 - [ ] T02.4 Implement z-trajectory generation

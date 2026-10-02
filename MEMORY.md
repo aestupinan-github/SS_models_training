@@ -5,10 +5,10 @@
 - Project lives in `Programs/SS_models_training/`.
 - Git repository initialized and pushed to `git@github.com:aestupinan-github/SS_models_training.git` (branch `master`).
 - Model input: `[position_z, qw, qx, qy, qz]` (5 features).
-- Model output: overlap only (single scalar, no contact head).
+- Model output: signed distance only (single scalar, no contact head).
 - Nondimensionalization: train at canonical size L = 1. At query time,
-  divide input z by particle half-size and multiply output overlap back.
-- LIGGGHTS sign convention: surrogate overlap is positive; `deltan = -overlap`.
+  divide input z by particle half-size and multiply output signed distance back.
+- Sign convention: model predicts signed distance (positive = gap, negative = penetration). LIGGGHTS `deltan = signed_distance`.
 - Each model is configuration-specific: one fixed shape, one fixed plane.
 - Existing prior art: `XDEM/temp/Test_meterCube_PeppaClaudeSonet5_Strategy_*`
   (Python generator, training, evaluation) and `XDEM/Cases/CPP_test/` (C++/
@@ -32,8 +32,10 @@
 
 ## Decisions and rationale
 
-- Single-output model (overlap only): simplifies the contract; contact
-  classification can be added later if needed.
+- Single-output model (signed distance only): simplifies the contract.
+- Signed log target transform: `t(x) = sign(x) * log10(|x| + EPS)`, `EPS = 1e-15`.
+- Sampling: penetration log-uniform in `[-0.5, -1e-5]`; gap uniform in `(0, 0.1]`.
+- Model output clamped to `[-0.5, 0.1]`.
 - Fresh C++ development inspired by `XDEM/Cases/CPP_test/` but independent.
 - Git repo to be initialized in `SS_models_training/`.
 
@@ -56,3 +58,4 @@
 - 2026-10-02: Project scaffold created. Specs 00–06 written, reviewed, and revised.
 - 2026-10-02: Git repo initialized and pushed to GitHub (`master`).
 - 2026-10-02: Spec 00 revised — added `inspired_codes/`, clarified R00.4–R00.6, removed numbering scheme, added edge-case and validation requirements.
+- 2026-10-02: Sign convention changed to LIGGGHTS signed distance (positive = gap, negative = penetration). Updated constitution, AGENTS, MEMORY, specs 01–04 and 06, `cube_wall.py`, and tests.

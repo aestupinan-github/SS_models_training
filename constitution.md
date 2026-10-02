@@ -35,3 +35,6 @@ never mix across interactions.
    allowed once a phase is approved, reported as smoke tests, not results.
 10. **Configuration-specific models.** Each model is specific to one fixed
     shape and one fixed plane. No generalization across shapes or walls.
+11. **Sign convention.** The surrogate predicts signed distance from the
+    shape's lowest vertex to the wall. Positive = gap (no contact),
+    negative = penetration. LIGGGHTS `deltan = signed_distance`.

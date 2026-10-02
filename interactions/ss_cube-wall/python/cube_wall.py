@@ -1,6 +1,8 @@
 """Cube-wall reference solution.
 
-Implements the exact analytical cube support function for overlap computation.
+Implements the exact analytical cube support function for signed-distance
+computation, following the LIGGGHTS sign convention:
+positive = gap (no contact), negative = penetration.
 """
 
 import numpy as np
@@ -32,11 +34,17 @@ def _rotate_vertices(q):
 
 
 def z_touch(q):
+    """Height of the cube centre at which the lowest vertex touches the wall."""
     rotated = _rotate_vertices(q)
     return -np.min(rotated[:, 2])
 
 
-def compute_overlap(q, z_center):
+def compute_signed_distance(q, z_center):
+    """Signed distance from the lowest vertex to the wall plane at z = 0.
+
+    Positive = gap (no contact), negative = penetration.
+    This is the LIGGGHTS `deltan` convention.
+    """
     rotated = _rotate_vertices(q)
     world_z = rotated[:, 2] + z_center
-    return max(0.0, -np.min(world_z))
+    return float(np.min(world_z))

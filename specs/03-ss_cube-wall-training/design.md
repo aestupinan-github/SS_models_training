@@ -2,7 +2,24 @@
 
 ## Target transform
 
-The overlap spans `[1e-5, 0.5]` — over 4 orders of magnitude. Training in log space (`log10(overlap + EPS)`) compresses this range and gives equal relative weight to small and large overlaps.
+The signed distance spans `[-0.5, +0.1]` and is symmetric in magnitude but signed. Training in log space compresses the range and gives equal relative weight to small and large values.
+
+The signed log transform is:
+
+```
+t(x) = sign(x) * log10(|x| + EPS)
+```
+
+with `EPS = 1e-15`. This maps:
+- `t(0) = 0`
+- small penetration `x = -1e-5` → `t ≈ 5`
+- large penetration `x = -0.5` → `t ≈ -0.3`
+
+The inverse is:
+
+```
+x = sign(t) * (10^|t| - EPS)
+```
 
 ## Model
 
@@ -10,12 +27,12 @@ SIREN MLP with sine activations. Prior work used 256→128→64→32→16 hidden
 
 ## Training loop
 
-1. Load CSV, extract features `[position_z, qw, qx, qy, qz]` and target `overlap`.
+1. Load CSV, extract features `[position_z, qw, qx, qy, qz]` and target `signed_distance`.
 2. Canonicalize quaternions (`qw >= 0`).
-3. Transform target: `log10(overlap + EPS)`.
+3. Transform target: `sign(x) * log10(|x| + EPS)`.
 4. Split 80/20 with fixed seed.
 5. Fit scalers on train only.
-6. Train with MSE loss in log space.
+6. Train with MSE loss in transformed space.
 7. Early stopping on validation loss.
 8. Export TorchScript + state_dict + scalers.
 

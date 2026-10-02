@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "interactions", "ss_cube-wall", "python"))
 
-from cube_wall import compute_overlap, canonicalize_quaternion, z_touch, CUBE_VERTICES
+from cube_wall import compute_signed_distance, canonicalize_quaternion, z_touch, CUBE_VERTICES
 
 
 class TestQuaternionCanonicalization(unittest.TestCase):
@@ -37,26 +37,56 @@ class TestCubeVertices(unittest.TestCase):
                 self.assertAlmostEqual(abs(coord), 0.5)
 
 
-class TestOverlapComputation(unittest.TestCase):
-    def test_flat_face_contact(self):
+class TestSignedDistance(unittest.TestCase):
+    def test_flat_face_contact_is_zero(self):
         q = [1.0, 0.0, 0.0, 0.0]
-        z = 0.5
-        overlap = compute_overlap(q, z)
-        self.assertAlmostEqual(overlap, 0.0)
+        self.assertAlmostEqual(compute_signed_distance(q, 0.5), 0.0)
 
-    def test_flat_face_penetration(self):
+    def test_flat_face_penetration_is_negative(self):
         q = [1.0, 0.0, 0.0, 0.0]
-        z = 0.3
-        overlap = compute_overlap(q, z)
-        self.assertAlmostEqual(overlap, 0.2)
+        self.assertAlmostEqual(compute_signed_distance(q, 0.3), -0.2)
 
-    def test_no_contact(self):
+    def test_no_contact_is_positive(self):
         q = [1.0, 0.0, 0.0, 0.0]
-        z = 1.0
-        overlap = compute_overlap(q, z)
-        self.assertAlmostEqual(overlap, 0.0)
+        self.assertAlmostEqual(compute_signed_distance(q, 1.0), 0.5)
 
-    def test_corner_contact(self):
+    def test_corner_contact_is_zero(self):
+        import math
+        angle = math.radians(54.7356)
+        axis = [1.0 / math.sqrt(3.0)] * 3
+        qw = math.cos(angle / 2.0)
+        qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
+        q = [qw, qx, qy, qz]
+        self.assertAlmostEqual(compute_signed_distance(q, z_touch(q)), 0.0, places=5)
+
+    def test_corner_penetration_is_negative(self):
+        import math
+        angle = math.radians(54.7356)
+        axis = [1.0 / math.sqrt(3.0)] * 3
+        qw = math.cos(angle / 2.0)
+        qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
+        q = [qw, qx, qy, qz]
+        self.assertAlmostEqual(compute_signed_distance(q, z_touch(q) - 0.1), -0.1, places=5)
+
+    def test_corner_gap_is_positive(self):
+        import math
+        angle = math.radians(54.7356)
+        axis = [1.0 / math.sqrt(3.0)] * 3
+        qw = math.cos(angle / 2.0)
+        qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
+        q = [qw, qx, qy, qz]
+        self.assertAlmostEqual(compute_signed_distance(q, z_touch(q) + 0.1), 0.1, places=5)
+
+
+class TestSlopeIsUnity(unittest.TestCase):
+    def test_slope_with_z_is_plus_one(self):
+        q = [1.0, 0.0, 0.0, 0.0]
+        dz = 1e-7
+        a = compute_signed_distance(q, 0.3)
+        b = compute_signed_distance(q, 0.3 + dz)
+        self.assertAlmostEqual((b - a) / dz, 1.0, places=6)
+
+    def test_slope_with_z_is_plus_one_corner(self):
         import math
         angle = math.radians(54.7356)
         axis = [1.0 / math.sqrt(3.0)] * 3
@@ -64,42 +94,27 @@ class TestOverlapComputation(unittest.TestCase):
         qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
         q = [qw, qx, qy, qz]
         zt = z_touch(q)
-        overlap = compute_overlap(q, zt)
-        self.assertAlmostEqual(overlap, 0.0, places=5)
-
-    def test_corner_penetration(self):
-        import math
-        angle = math.radians(54.7356)
-        axis = [1.0 / math.sqrt(3.0)] * 3
-        qw = math.cos(angle / 2.0)
-        qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
-        q = [qw, qx, qy, qz]
-        zt = z_touch(q)
-        overlap = compute_overlap(q, zt - 0.1)
-        self.assertAlmostEqual(overlap, 0.1, places=5)
-
-    def test_overlap_never_negative(self):
-        q = [1.0, 0.0, 0.0, 0.0]
-        for z in [0.0, 0.1, 0.5, 1.0, 2.0]:
-            overlap = compute_overlap(q, z)
-            self.assertGreaterEqual(overlap, 0.0)
+        dz = 1e-7
+        a = compute_signed_distance(q, zt - 0.05)
+        b = compute_signed_distance(q, zt - 0.05 + dz)
+        self.assertAlmostEqual((b - a) / dz, 1.0, places=6)
 
 
 class TestZTouch(unittest.TestCase):
     def test_flat_face_z_touch(self):
-        q = [1.0, 0.0, 0.0, 0.0]
-        zt = z_touch(q)
-        self.assertAlmostEqual(zt, 0.5)
+        self.assertAlmostEqual(z_touch([1.0, 0.0, 0.0, 0.0]), 0.5)
 
     def test_z_touch_is_orientation_dependent(self):
         import math
-        q_flat = [1.0, 0.0, 0.0, 0.0]
         angle = math.radians(54.7356)
         axis = [1.0 / math.sqrt(3.0)] * 3
         qw = math.cos(angle / 2.0)
         qx, qy, qz = [math.sin(angle / 2.0) * a for a in axis]
-        q_corner = [qw, qx, qy, qz]
-        self.assertNotAlmostEqual(z_touch(q_flat), z_touch(q_corner))
+        self.assertNotAlmostEqual(z_touch([1.0, 0.0, 0.0, 0.0]), z_touch([qw, qx, qy, qz]))
+
+    def test_z_touch_equals_negative_signed_distance_at_zero(self):
+        q = [0.5, 0.5, 0.5, 0.5]
+        self.assertAlmostEqual(z_touch(q), -compute_signed_distance(q, 0.0))
 
 
 if __name__ == "__main__":

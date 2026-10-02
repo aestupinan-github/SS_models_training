@@ -4,10 +4,10 @@
 
 ### R04.1 Evaluation test cases
 
-1. **In-domain** — random poses and overlaps within the training distribution.
-2. **Off-anchor** — poses/overlaps not seen during training (held-out orientations, edge/corner cases).
-3. **Slope check** — verify the surrogate's gradient `d(overlap)/d(z)` matches the analytical slope at contact.
-4. **Scale rescaling** — verify nondimensionalization: train at L=1, query at different particle sizes, confirm rescale-by-half-size rule.
+1. **In-domain** — random poses and signed distances within the training distribution.
+2. **Off-anchor** — poses/signed distances not seen during training (held-out orientations, edge/corner cases).
+3. **Slope check** — verify the surrogate's gradient `d(signed_distance)/d(z)` matches the analytical slope. Since `signed_distance = -z_touch + position_z`, the exact slope is `+1`.
+4. **Scale rescaling** — verify nondimensionalization: train at L=1, query at different particle sizes, confirm the rescale-by-half-size rule.
 
 ### R04.2 Fixed test cases
 
@@ -17,12 +17,12 @@
 ### R04.3 Slope check method
 
 - Exact analytical derivative of the support function (not finite difference).
-- The support function is piecewise-linear in z; the slope is `-1` when a single vertex is the support point.
+- The signed distance is linear in z with slope `+1`.
 
 ### R04.4 Scale rescaling test
 
 - Sweep over at least 3 particle sizes (e.g. 0.5x, 1x, 2x canonical).
-- Verify: `overlap_actual = overlap_model * half_size`.
+- Verify: `signed_distance_actual = signed_distance_model * half_size`.
 
 ### R04.5 Artifact layout
 
