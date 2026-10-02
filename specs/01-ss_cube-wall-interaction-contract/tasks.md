@@ -8,5 +8,5 @@
 - [x] T01.6 Define scaling convention
 - [x] T01.7 Define sign convention (LIGGGHTS)
 - [x] T01.8 Define overlap and position ranges
-- [ ] T01.9 Implement generator (Phase 1)
+- [x] T01.9 Implement generator (Phase 1). Covers R01.1, R01.3, R01.4, R01.5, R01.12
 - [ ] T01.10 Validate contract with smoke tests
