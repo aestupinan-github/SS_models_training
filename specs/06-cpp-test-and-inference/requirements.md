@@ -6,7 +6,7 @@
 
 ### R06.1 Standalone
 
-- No dependency on XDEM source.
+- No dependency on any external DEM or simulation source code.
 - Uses system LibTorch (portable; ask for system-wide install or fetch at build time).
 
 ### R06.2 Flexible CLI
@@ -18,7 +18,7 @@
 
 - Python scripts for plotting/analysis.
 - Bash wrappers for execution.
-- Mirrors the `XDEM/Cases/CPP_test/` style.
+- Reference scripts for style: `inspired_codes/CPP_test/` (partly unfinished, to be reviewed).
 
 ### R06.4 CTest integration
 

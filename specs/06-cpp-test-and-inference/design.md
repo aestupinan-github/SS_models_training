@@ -30,4 +30,4 @@ CMake with CTest. `CMakeLists.txt` finds LibTorch via `find_package` or fetches 
 
 ## Inspiration
 
-Inspired by `XDEM/Cases/CPP_test/` but independent fresh development.
+Inspired by the reference scripts in `inspired_codes/CPP_test/` (partly unfinished, to be reviewed) but independent fresh development.

@@ -6,6 +6,11 @@ This project builds and trains ML surrogate models of particle-shape contact
 interactions for DEM. Each interaction is modular: code, data, and outputs
 never mix across interactions.
 
+The end goal is a new LIGGGHTS particle-shape type whose overlap is computed
+by a trained surrogate, evaluated from C++ at runtime. This repo delivers
+the trained artifacts and their interface contract; the LIGGGHTS integration
+is a separate project.
+
 ## Durable principles
 
 1. **Scientific accuracy.** Training labels come from the true reference
@@ -35,6 +40,17 @@ never mix across interactions.
    allowed once a phase is approved, reported as smoke tests, not results.
 10. **Configuration-specific models.** Each model is specific to one fixed
     shape and one fixed plane. No generalization across shapes or walls.
-11. **Sign convention.** The surrogate predicts signed distance from the
-    shape's lowest vertex to the wall. Positive = gap (no contact),
-    negative = penetration. LIGGGHTS `deltan = signed_distance`.
+11. **Sign convention.** The surrogate predicts the signed distance between
+    shape and wall, defined through the shape's support function (for a
+    polyhedron and a plane: the height of the lowest vertex above the
+    plane). Positive = gap (no contact), negative = penetration. LIGGGHTS
+    `deltan` is negative for actual overlap, so `deltan = signed_distance`.
+12. **Accuracy first.** Overlap accuracy takes priority over extra outputs
+    or convenience. Accuracy targets are stated as explicit, measurable
+    tolerances in the specs. Contact point and normal are a later feature.
+13. **Deployable without Python.** Every artifact and preprocessing step
+    must be reproducible in C++ at runtime (portable formats, documented
+    transforms, no Python dependency).
+14. **Explicit size convention.** Models are trained at a canonical size.
+    Rescaling to real particles uses a documented, explicit size definition
+    (e.g. edge length), never an implicit one.
