@@ -1,0 +1,37 @@
+# Generated data
+interactions/*/data/*.csv
+interactions/*/data/*.h5
+interactions/*/data/*.npz
+
+# Model artifacts
+interactions/*/output/*.pt
+interactions/*/output/*.pth
+interactions/*/output/*.save
+interactions/*/output/*.onnx
+
+# Logs
+interactions/*/output/*.log
+interactions/*/output/*.txt
+
+# Figures (keep directory, ignore contents)
+interactions/*/figures/*
+!interactions/*/figures/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# C++ build
+CPP_test/build/
+CPP_test/CMakeCache.txt
+CPP_test/CMakeFiles/
+CPP_test/Makefile
+CPP_test/cmake_install.cmake
+CPP_test/*.o
+
+# OS / editor
+.DS_Store
+*.swp
+*~
