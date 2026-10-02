@@ -3,7 +3,7 @@
 ## Confirmed facts
 
 - Project lives in `Programs/SS_models_training/`.
-- Not a git repository (as of Phase 0 start).
+- Git repository initialized and pushed to `git@github.com:aestupinan-github/SS_models_training.git` (branch `master`).
 - Model input: `[position_z, qw, qx, qy, qz]` (5 features).
 - Model output: overlap only (single scalar, no contact head).
 - Nondimensionalization: train at canonical size L = 1. At query time,
@@ -26,9 +26,8 @@
 
 ## Current scope and status
 
-- Phase 0: scaffold created (constitution, AGENTS, MEMORY, README,
-  interactions/ss_cube-wall/, CPP_test/). Specs not yet written — under
-  discussion.
+- Phase 0: scaffold created. Specs 00–06 written, reviewed, and revised.
+- Git repo initialized and pushed to GitHub.
 - No generator, training, or C++ code written yet.
 
 ## Decisions and rationale
@@ -54,4 +53,6 @@
 
 ## Recent changes
 
-- 2026-10-02: Project scaffold created. Specs 00–06 written and reviewed.
+- 2026-10-02: Project scaffold created. Specs 00–06 written, reviewed, and revised.
+- 2026-10-02: Git repo initialized and pushed to GitHub (`master`).
+- 2026-10-02: Spec 00 revised — added `inspired_codes/`, clarified R00.4–R00.6, removed numbering scheme, added edge-case and validation requirements.

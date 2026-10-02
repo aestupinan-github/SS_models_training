@@ -5,5 +5,6 @@
 - [x] T00.3 Create `CPP_test/` placeholder
 - [x] T00.4 Create `.gitignore`
 - [x] T00.5 Initialize git repository
-- [ ] T00.6 Add new interaction `ss_<shape>-wall` (when requested)
-- [ ] T00.7 Add new interaction `ss_<shape>-ss_<shape>` (when requested)
+- [ ] T00.6 Add structure-check script or documented validation step
+- [ ] T00.7 Add new interaction `ss_<shape>-wall` (when requested)
+- [ ] T00.8 Add new interaction `ss_<shape>-ss_<shape>` (when requested)
