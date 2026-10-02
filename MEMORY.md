@@ -139,6 +139,7 @@
 
 ## Recent changes
 
+- 2026-10-03: Renamed `constitution.md` to `CONSTITUTION.md` (capitalised like `AGENTS.md`, `MEMORY.md`, to match the user's other projects and central custom commands). References updated in README, AGENTS, spec 00, `check_structure.py`, `tests/test_structure.py`.
 - 2026-10-02: Project scaffold created. Specs 00-06 written, reviewed, and revised.
 - 2026-10-02: Git repo initialized and pushed to GitHub (`master`).
 - 2026-10-02: Spec 00 revised: added `inspired_codes/`, clarified R00.4-R00.6, removed numbering scheme, added edge-case and validation requirements.

@@ -6,7 +6,7 @@ ML surrogate models of particle-shape contact interactions for DEM.
 
 ```
 SS_models_training/
-  constitution.md
+  CONSTITUTION.md
   AGENTS.md
   MEMORY.md
   README.md

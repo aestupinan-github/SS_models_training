@@ -6,7 +6,7 @@
 
 `SS_models_training/` contains:
 
-- `constitution.md` — durable principles
+- `CONSTITUTION.md` — durable principles
 - `AGENTS.md` — working style and pointers
 - `MEMORY.md` — confirmed facts, decisions, open questions
 - `README.md` — project overview

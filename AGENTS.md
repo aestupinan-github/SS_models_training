@@ -60,7 +60,7 @@ Do not start a later phase without explicit request.
 
 ## Pointers
 
-- `constitution.md` — durable principles.
+- `CONSTITUTION.md` — durable principles.
 - `MEMORY.md` — confirmed facts, open questions, decisions, recent changes.
 - `specs/` — specifications per phase and interaction.
 - `interactions/` — one folder per interaction.

@@ -24,7 +24,7 @@ class StructureResult:
 def check_structure(project_root: str) -> StructureResult:
     errors = []
 
-    top_level_files = ["constitution.md", "AGENTS.md", "MEMORY.md", "README.md"]
+    top_level_files = ["CONSTITUTION.md", "AGENTS.md", "MEMORY.md", "README.md"]
     top_level_dirs = ["interactions", "inspired_codes", "CPP_test", "specs"]
 
     for f in top_level_files:

@@ -20,7 +20,7 @@ class TestStructureCheck(unittest.TestCase):
 
     def _create_valid_project(self):
         root = self.project_root
-        for f in ["constitution.md", "AGENTS.md", "MEMORY.md", "README.md"]:
+        for f in ["CONSTITUTION.md", "AGENTS.md", "MEMORY.md", "README.md"]:
             open(os.path.join(root, f), "w").close()
         for d in ["interactions", "inspired_codes", "CPP_test", "specs"]:
             os.makedirs(os.path.join(root, d))
@@ -42,10 +42,10 @@ class TestStructureCheck(unittest.TestCase):
 
     def test_missing_top_level_file_fails(self):
         self._create_valid_project()
-        os.remove(os.path.join(self.project_root, "constitution.md"))
+        os.remove(os.path.join(self.project_root, "CONSTITUTION.md"))
         result = check_structure(self.project_root)
         self.assertFalse(result.is_valid)
-        self.assertIn("constitution.md", result.errors[0])
+        self.assertIn("CONSTITUTION.md", result.errors[0])
 
     def test_missing_top_level_dir_fails(self):
         self._create_valid_project()
