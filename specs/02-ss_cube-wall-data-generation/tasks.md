@@ -2,7 +2,7 @@
 
 ## Status
 
-**DRAFT, revision 2, 2026-10-03. Not approved.** Revision 1 tasks
+**Revision 2, 2026-10-03. APPROVED by the user (2026-10-03). Not started.** Revision 1 tasks
 (T02.1-T02.9, none started) are replaced. Each task: tests first, see them
 fail, implement, run all tests.
 
@@ -14,7 +14,7 @@ fail, implement, run all tests.
 - [ ] **T02.3 Orientation sampler: `uniform` and `special`, with spin, yaw and canonicalization.** R02.3
   - Done when: special `Δ` values and `h` values are exact; quaternions canonical; yaw statistics within tolerance.
 - [ ] **T02.4 Orientation sampler: `near_kink` by bisection, and exclusion.** R02.3
-  - Done when: achieved `Δ` within `1e-9` relative of target; every decade of `[1e-6, 1e-1]` populated; no orientation within the exclusion angle.
+  - Done when: achieved `Δ` within `1e-9` relative of target; every decade of `[1e-6, 1e-1]` populated; no row whose `u` is within the exclusion angle of an excluded `u` (D02.3).
 - [ ] **T02.5 `sd` sampler and row assembly with recomputed labels.** R02.1, R02.2, R02.4, R02.6
   - Done when: ranges per part hold; gap-safety fallback works; labels match reference within `1e-12`; columns, dtypes and order correct.
 - [ ] **T02.6 Coverage table and acceptance checks.** R02.5, R02.12

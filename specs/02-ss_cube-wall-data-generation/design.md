@@ -2,8 +2,29 @@
 
 ## Status
 
-**DRAFT, revision 2, 2026-10-03. Not approved.** Follows `requirements.md`
+**Revision 2, 2026-10-03. APPROVED by the user (2026-10-03).** Follows `requirements.md`
 revision 2 (approved). Supersedes design revision 1 (git history).
+
+### Decisions delegated to the agent (user: "you decide, but record this", 2026-10-03)
+
+- **D02.1 Extra columns `sd_part` and `delta`: adopted.** They are stored
+  after the R02.6 columns, whose order is unchanged. Reason: the coverage
+  table (R02.5) and later per-part error analysis need them, and
+  recomputing `delta` later would duplicate logic.
+- **D02.2 `.gitignore`: add `interactions/*/data/dataset_*/`.** Datasets are
+  never committed; their provenance and README listing are the record. The
+  other `.gitignore`/`.gitkeep` gaps (review item A5) stay a separate change.
+- **D02.3 Exclusion by body-frame direction `u`, not by full SO(3)
+  orientation.** Reason: `sd` depends only on `u`, and every sampled
+  orientation gets random spin and yaw, so excluding one quaternion would
+  still leave the same `u` (same `sd`) in training. Rule: a sampled
+  orientation is rejected if the angle between its `u` and the `u` of any
+  excluded orientation is below `exclude_angle_deg`. *Confirmed* (measured,
+  20000 pairs): the `u` angle never exceeds the SO(3) angle, so this rule
+  removes a superset of the per-orientation rule. Symmetry classes are not
+  handled by the generator, because they are shape-specific (unknown for an
+  arbitrary STL); spec 04 can put the symmetric images of a held-out `u`
+  into the exclusion list itself.
 
 ## Requirements traceability
 
@@ -136,11 +157,10 @@ the target `Δ` within relative error `2e-10`, about 1e4 rows per `Δ` decade
 over `[1e-6, 1e-1]`. In 1.7% of samples the bracket `θ ≤ 0.5` does not reach
 `Δ*` (large targets); those samples are redrawn.
 
-Exclusion: angular distance between orientations is
-`2 arccos(|q1 · q2|)`. Any sampled orientation within `exclude_angle_deg` of an
-excluded quaternion is redrawn. The yaw makes this a full-SO(3) distance, so
-exclusion is per orientation, not per equivalence class. *Open question* for
-spec 04: whether held-out sets should exclude whole symmetry classes.
+Exclusion (D02.3): for each excluded quaternion compute its `u`. A sampled
+orientation is redrawn if `arccos(u · u_excl) < exclude_angle_deg` for any
+excluded `u_excl`. Symmetric images, if wanted, are listed explicitly by
+spec 04.
 
 ### `sd` sampling (R02.2, R02.4)
 
@@ -257,7 +277,7 @@ time.
 | `special` orientations have `Δ = 0` for faces and edges; corner-down `h = sqrt(3)/2` | R02.3 |
 | `near_kink`: achieved `Δ` within `1e-9` relative of target; decades covered | R02.3, R02.5 |
 | `uniform`: canonical quaternions, yaw uniformity (mean of `cos ψ`, `sin ψ` near 0) | R02.3 |
-| Exclusion: no orientation within the angle of an excluded quaternion | R02.3 |
+| Exclusion: no row whose `u` is within the angle of an excluded `u` (D02.3) | R02.3 |
 | `sd` parts: ranges per part; gap safety falls back when `Z_PREFILTER - h <= 0.1` | R02.2 |
 | Labels: `sd = position_z - h_ref` within `1e-12` | R02.1, R02.12 |
 | Columns, dtypes, order; CSV header and 17-digit round trip | R02.6, R02.7 |
@@ -277,6 +297,6 @@ Tests write into a temporary directory, not into `data/`.
   directions; for non-polyhedral shapes (smooth STL with many facets) the set
   becomes large and `near_kink` concentrates on many short edges. To be
   revisited when a second shape is added.
-- Exclusion is per orientation, not per symmetry class (open question for
-  spec 04).
+- Exclusion is by body-frame direction `u` (D02.3); symmetric images are not
+  added automatically.
 - Bitwise reproducibility holds only for the same NumPy/SciPy versions.

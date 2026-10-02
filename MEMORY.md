@@ -70,7 +70,8 @@
   (R01.17) and continuity (R01.18) as surrogate requirements.
 - Spec 02 (data generation): **requirements rev 2 APPROVED** (2026-10-03),
   with default fractions and `dataset_XXX` folders. Design and tasks rev 2
-  drafted, awaiting approval. No generator code yet.
+  APPROVED (2026-10-03). Implementation (T02.1-T02.8) not started; waits for
+  the user's go. No generator code yet.
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -78,6 +79,13 @@
   continuity and sign safety), spec 06, `.gitignore`/`.gitkeep`.
 
 ## Decisions and rationale
+
+- Spec 02 design decisions delegated to the agent by the user ("you
+  decide, but record this", 2026-10-03), recorded in spec 02 `design.md`:
+  D02.1 keep extra columns `sd_part`, `delta`; D02.2 `.gitignore` ignores
+  `interactions/*/data/dataset_*/`; D02.3 held-out exclusion by body-frame
+  direction `u` (superset of per-orientation exclusion, measured), symmetric
+  images listed explicitly by spec 04.
 
 - Single-output model (signed distance only): simplifies the contract.
   Contact point/normal are deferred (user priority: overlap accuracy).
