@@ -68,8 +68,10 @@
   and shape constants (`Z_PREFILTER`, `SD_COVER_MAX ≈ 0.466`, no unseen
   inputs below the pre-filter), shape-general `support_height`, sign safety
   (R01.17) and continuity (R01.18) as surrogate requirements.
-- Spec 02 (data generation): reviewed (41 findings), requirements being
-  redrafted. Spec 03, 04, 06: still revision 1, to be revised.
+- Spec 02 (data generation): **requirements rev 2 APPROVED** (2026-10-03),
+  with default fractions and `dataset_XXX` folders. Design and tasks rev 2
+  drafted, awaiting approval. No generator code yet.
+- Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
   (off-anchor definition, invariance tests, tumbling-path test for
@@ -139,6 +141,7 @@
 
 ## Recent changes
 
+- 2026-10-03: Spec 02 requirements rev 2 approved; design and tasks rev 2 drafted (near_kink by bisection on tilt angle, measured exact to 2e-10; SeedSequence streams; atomic dataset_XXX folders; uncompressed npz, byte-reproducible).
 
 - 2026-10-03: Spec 01 revision 3 (approved): R01.11-R01.13 no unseen inputs
   (gap safety zone up to `SD_COVER_MAX`), R01.16 convex-hull generalisation
