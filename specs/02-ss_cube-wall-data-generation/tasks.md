@@ -6,9 +6,10 @@
 (T02.1-T02.9, none started) are replaced. Each task: tests first, see them
 fail, implement, run all tests.
 
-- [ ] **T02.1 Configuration and validation.** R02.11, R02.13
+- [x] **T02.1 Configuration and validation.** R02.11, R02.13
   - Files: `generate_dataset.py` (`GenConfig`, `validate_config`, `ConfigError`), `tests/test_generate_dataset.py`.
   - Done when: each invalid case of R02.11 and the size limit raise `ConfigError`; a valid default config passes.
+  - Completed 2026-10-03. Covers R02.11 (configuration part: non-positive counts, fractions negative or not summing to 1, ranges outside spec 01, low not below high, missing seed; validation writes nothing) and R02.13 (smoke limit 1e4 rows, refused without `allow_full_scale`). Also fixes the approved default fractions (R02.2, R02.3) as constants. The R02.11 runtime-failure part (non-finite values, reference errors, write failures) belongs to T02.5-T02.7. Tests: 28 new, seen to fail (module missing) before the code; full suite 83 tests OK.
 - [ ] **T02.2 Shape description from a point set.** R02.1, R02.3
   - Done when: cube gives 6 facets, 12 edges, `R_CIRC` and `H_MIN` equal to `cube_wall` constants.
 - [ ] **T02.3 Orientation sampler: `uniform` and `special`, with spin, yaw and canonicalization.** R02.3

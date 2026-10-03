@@ -70,8 +70,9 @@
   (R01.17) and continuity (R01.18) as surrogate requirements.
 - Spec 02 (data generation): **requirements rev 2 APPROVED** (2026-10-03),
   with default fractions and `dataset_XXX` folders. Design and tasks rev 2
-  APPROVED (2026-10-03). Implementation (T02.1-T02.8) not started; waits for
-  the user's go. No generator code yet.
+  APPROVED (2026-10-03). T02.1 done (config and validation in
+  `generate_dataset.py`, 28 tests). T02.2-T02.8 not started; each waits for
+  the user's go.
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -148,6 +149,8 @@
   project root.
 
 ## Recent changes
+
+- 2026-10-03: T02.1 implemented: `GenConfig`, `validate_config`, `ConfigError`, approved default fractions, smoke limit 1e4 rows. 83 tests OK.
 
 - 2026-10-03: Spec 02 requirements rev 2 approved; design and tasks rev 2 drafted (near_kink by bisection on tilt angle, measured exact to 2e-10; SeedSequence streams; atomic dataset_XXX folders; uncompressed npz, byte-reproducible).
 
