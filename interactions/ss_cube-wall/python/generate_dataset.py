@@ -3,7 +3,10 @@
 Implemented so far:
 - T02.1, configuration and validation (R02.11, R02.13).
 - T02.2, shape description from a point set (R02.1, R02.3).
-Later tasks (T02.3-T02.8) add the samplers, rows, checks, writer and CLI.
+- T02.3, orientation sampler: uniform and special, with spin, yaw and
+  canonicalization (R02.3).
+Later tasks (T02.4-T02.8) add near_kink and exclusion, rows, checks, writer
+and CLI.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
@@ -14,6 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.spatial import ConvexHull, QhullError
+from scipy.spatial.transform import Rotation
 
 # Largest dataset that may be generated without explicit approval (R02.13).
 SMOKE_MAX_ROWS = 10_000
@@ -289,3 +293,139 @@ def shape_from_points(points):
         r_circ=float(np.max(np.linalg.norm(verts, axis=1))),
         h_min=float(facet_offsets.min()),
     )
+
+
+# ---------------------------------------------------------------------------
+# T02.3 Orientation sampler: uniform and special (R02.3)
+# ---------------------------------------------------------------------------
+
+# Integer codes of the `component` column (design: Data and units).
+COMPONENT_CODES = {"uniform": 0, "near_kink": 1, "special": 2}
+
+
+def _check_count(n):
+    if not _is_int(n) or n <= 0:
+        raise ValueError(f"count must be a positive integer, got {n!r}")
+
+
+def canonicalize_quaternions(q):
+    """Vectorized spec 01 R01.4 canonicalization of (n, 4) quaternions (w, x, y, z).
+
+    Normalize; if qw < 0 negate; if qw == 0 negate so that the first nonzero
+    of (qx, qy, qz) is positive. Bitwise equal to cube_wall.canonicalize_quaternion.
+    Raises ValueError for zero-norm or non-finite rows.
+    """
+    q = np.array(q, dtype=np.float64)
+    if q.ndim != 2 or q.shape[1] != 4:
+        raise ValueError(f"quaternions must have shape (n, 4), got {q.shape}")
+    if not np.all(np.isfinite(q)):
+        raise ValueError("quaternions have non-finite components")
+    norm = np.linalg.norm(q, axis=1)
+    if np.any(norm == 0.0):
+        raise ValueError("quaternion has zero norm")
+    q = q / norm[:, None]
+    flip = q[:, 0] < 0.0
+    zero_w = q[:, 0] == 0.0
+    if np.any(zero_w):
+        v = q[zero_w, 1:]
+        first = np.argmax(v != 0.0, axis=1)        # index of first nonzero component
+        flip[zero_w] = v[np.arange(len(v)), first] < 0.0
+    q[flip] = -q[flip]
+    return q + 0.0                                   # -0.0 -> 0.0, as in cube_wall
+
+
+def _to_scipy(q):
+    return q[:, [1, 2, 3, 0]]
+
+
+def _from_scipy(rot):
+    return rot.as_quat()[:, [3, 0, 1, 2]]
+
+
+def u_from_quats(q):
+    """Body-frame direction towards the wall, u = -R(q)^T e_z (spec 01 R01.16)."""
+    rot = Rotation.from_quat(_to_scipy(np.asarray(q, dtype=np.float64)))
+    return -rot.inv().apply([0.0, 0.0, 1.0])
+
+
+def support_gap(shape, u):
+    """Support gap Delta(u): largest minus second-largest of v . u over hull vertices.
+
+    Equals the second-smallest minus the smallest world height (spec 02
+    Definitions). Delta = 0 where the lowest feature is an edge or a face.
+    """
+    p = np.sort(np.asarray(u, dtype=np.float64) @ shape.vertices.T, axis=1)
+    return p[:, -1] - p[:, -2]
+
+
+def rotation_from_u(u):
+    """Minimal rotation per row mapping body direction u to world -e_z."""
+    u = np.asarray(u, dtype=np.float64)
+    u = u / np.linalg.norm(u, axis=1, keepdims=True)
+    target = np.array([0.0, 0.0, -1.0])
+    axis = np.cross(u, target)
+    s = np.linalg.norm(axis, axis=1)
+    c = u @ target
+    angle = np.arctan2(s, c)
+    rotvec = np.zeros_like(u)
+    ok = s > 1e-300
+    rotvec[ok] = axis[ok] / s[ok, None] * angle[ok, None]
+    # antiparallel (u = +e_z): rotate by pi about body x
+    anti = (~ok) & (c < 0.0)
+    rotvec[anti] = [np.pi, 0.0, 0.0]
+    return Rotation.from_rotvec(rotvec)
+
+
+def _spin_and_yaw(rot0, u, rng):
+    """rot = Rz(psi) * rot0 * R_u(phi): random spin about body u, random yaw about world z."""
+    n = len(u)
+    phi = rng.uniform(0.0, 2.0 * np.pi, n)
+    psi = rng.uniform(0.0, 2.0 * np.pi, n)
+    spin = Rotation.from_rotvec(u * phi[:, None])
+    yaw = Rotation.from_rotvec(np.outer(psi, [0.0, 0.0, 1.0]))
+    return yaw * rot0 * spin
+
+
+def sample_uniform(n, rng):
+    """`uniform` component: n canonical quaternions, Haar measure on SO(3), then yaw.
+
+    The yaw does not change the distribution (Haar is invariant) but is applied
+    for uniformity with the other components (design).
+    """
+    _check_count(n)
+    rot = Rotation.random(n, random_state=rng)
+    psi = rng.uniform(0.0, 2.0 * np.pi, n)
+    rot = Rotation.from_rotvec(np.outer(psi, [0.0, 0.0, 1.0])) * rot
+    return canonicalize_quaternions(_from_scipy(rot))
+
+
+def special_directions(shape):
+    """Shape-defined special body directions u (R02.3): face, edge, vertex down.
+
+    face:   unit outward facet normals
+    edge:   normalized sum of the two facet normals of each edge
+    vertex: normalized hull vertex directions
+    Returns (dirs (m, 3), kind (m,) array of 'face'/'edge'/'vertex').
+    """
+    faces = np.array(shape.facet_normals)
+    edges = np.array([faces[i] + faces[j] for i, j in shape.edge_facets])
+    edges /= np.linalg.norm(edges, axis=1, keepdims=True)
+    verts = np.array(shape.vertices) / np.linalg.norm(shape.vertices, axis=1, keepdims=True)
+    dirs = np.vstack([faces, edges, verts])
+    kind = np.array(["face"] * len(faces) + ["edge"] * len(edges) + ["vertex"] * len(verts))
+    return dirs, kind
+
+
+def sample_special(shape, n, rng):
+    """`special` component: n orientations whose u is a special direction.
+
+    Directions are drawn uniformly from the finite set, then random spin about
+    u and yaw about world z are applied (design). Returns (quats (n, 4)
+    canonical, which (n,) index into special_directions(shape)).
+    """
+    _check_count(n)
+    dirs, _ = special_directions(shape)
+    which = rng.integers(0, len(dirs), n)
+    u = dirs[which]
+    rot = _spin_and_yaw(rotation_from_u(u), u, rng)
+    return canonicalize_quaternions(_from_scipy(rot)), which

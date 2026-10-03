@@ -2,6 +2,8 @@
 
 T02.1: configuration and validation (R02.11, R02.13).
 T02.2: shape description from a point set (R02.1, R02.3).
+T02.3: orientation sampler, uniform and special, with spin, yaw and
+       canonicalization (R02.3).
 """
 
 import dataclasses
@@ -19,9 +21,17 @@ import cube_wall as cw  # noqa: E402
 from scipy.spatial.transform import Rotation as R  # noqa: E402
 from generate_dataset import (  # noqa: E402
     ConfigError,
+    COMPONENT_CODES,
     Shape,
     ShapeError,
+    canonicalize_quaternions,
+    rotation_from_u,
+    sample_special,
+    sample_uniform,
     shape_from_points,
+    special_directions,
+    support_gap,
+    u_from_quats,
     DEFAULT_ORIENT_FRACTIONS,
     DEFAULT_SD_FRACTIONS,
     GenConfig,
@@ -360,6 +370,158 @@ class TestShapeInvalid(unittest.TestCase):
 
     def test_origin_on_hull_boundary(self):
         self.assertShapeError(cw.CUBE_VERTICES + [0.5, 0.0, 0.0])
+
+
+def _cube_shape():
+    return shape_from_points(cw.CUBE_VERTICES)
+
+
+class TestVectorHelpers(unittest.TestCase):
+    """T02.3 helpers: vectorized canonicalization, u, support gap, rotation from u."""
+
+    def test_canonicalize_matches_spec01_reference_bitwise(self):
+        q = R.random(5000, random_state=SEED).as_quat()[:, [3, 0, 1, 2]]
+        special = np.array([[0, 1, 0, 0], [0, -1, 0, 0], [0, 0, -0.6, 0.8], [0, 0, 0, -1],
+                            [-1, 0, 0, 0], [-2, 0, 0, 0], [0, 0, 3, 0]], float)
+        q = np.vstack([q, -q, special])
+        got = canonicalize_quaternions(q)
+        ref = np.array([cw.canonicalize_quaternion(x) for x in q])
+        self.assertTrue(np.array_equal(got, ref))
+
+    def test_canonicalize_rejects_invalid(self):
+        for bad in (np.zeros((1, 4)), np.array([[np.nan, 0, 0, 1]]), np.ones((2, 3))):
+            with self.assertRaises(ValueError):
+                canonicalize_quaternions(bad)
+
+    def test_u_from_quats_matches_reference_support(self):
+        s = _cube_shape()
+        q = canonicalize_quaternions(R.random(500, random_state=SEED).as_quat()[:, [3, 0, 1, 2]])
+        u = u_from_quats(q)
+        np.testing.assert_allclose(np.linalg.norm(u, axis=1), 1.0, atol=1e-14)
+        h = (u @ s.vertices.T).max(axis=1)
+        ref = np.array([cw.support_height(cw.CUBE_VERTICES, x) for x in q])
+        np.testing.assert_allclose(h, ref, rtol=0, atol=1e-15)
+
+    def test_support_gap(self):
+        s = _cube_shape()
+        u = np.array([[0, 0, 1.0], [1, 1, 0], [1, 1, 1], [0.1, 0.2, 1.0]])
+        u /= np.linalg.norm(u, axis=1, keepdims=True)
+        d = support_gap(s, u)
+        self.assertEqual(d[0], 0.0)
+        self.assertLess(d[1], 1e-15)
+        self.assertAlmostEqual(d[2], 1 / math.sqrt(3), places=14)
+        self.assertGreater(d[3], 0.0)
+
+    def test_rotation_from_u_maps_u_to_wall(self):
+        rng = np.random.default_rng(SEED)
+        u = rng.normal(size=(2000, 3))
+        u /= np.linalg.norm(u, axis=1, keepdims=True)
+        u = np.vstack([u, [[0, 0, 1.0], [0, 0, -1.0], [1, 0, 0]]])   # incl. antiparallel case
+        rot = rotation_from_u(u)
+        np.testing.assert_allclose(rot.apply(u), np.tile([0, 0, -1.0], (len(u), 1)), atol=1e-14)
+
+
+class TestSampleUniform(unittest.TestCase):
+    """`uniform` component: Haar SO(3), yaw, canonical quaternions."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.q = sample_uniform(20000, np.random.default_rng(SEED))
+
+    def test_shape_and_canonical(self):
+        self.assertEqual(self.q.shape, (20000, 4))
+        self.assertEqual(self.q.dtype, np.float64)
+        np.testing.assert_allclose(np.linalg.norm(self.q, axis=1), 1.0, atol=1e-15)
+        # idempotent up to the last bit (re-normalization), as in spec 01 tests
+        np.testing.assert_allclose(self.q, canonicalize_quaternions(self.q), rtol=0, atol=1e-15)
+        self.assertTrue(np.all(self.q[:, 0] >= 0.0))
+
+    def test_haar_statistics(self):
+        # Haar measure: body direction u uniform on S^2 -> mean ~0, E[u_i^2] = 1/3;
+        # rotation angle density (1 - cos a)/pi -> E[cos a] = -1/2... for |q|: E[qw^2] = 1/4 per comp
+        u = u_from_quats(self.q)
+        n = len(u)
+        self.assertLess(np.abs(u.mean(axis=0)).max(), 5 / math.sqrt(n))
+        np.testing.assert_allclose((u ** 2).mean(axis=0), 1 / 3, atol=5 * math.sqrt(4 / 45 / n))
+        np.testing.assert_allclose((self.q ** 2).mean(axis=0), 0.25, atol=0.01)
+
+    def test_yaw_statistics(self):
+        # world-frame yaw of the body x axis is uniform: mean of cos and sin near 0
+        x_world = R.from_quat(self.q[:, [1, 2, 3, 0]]).apply([1.0, 0, 0])
+        psi = np.arctan2(x_world[:, 1], x_world[:, 0])
+        tol = 5 / math.sqrt(2 * len(psi))
+        self.assertLess(abs(np.cos(psi).mean()), tol)
+        self.assertLess(abs(np.sin(psi).mean()), tol)
+
+    def test_reproducible(self):
+        a = sample_uniform(100, np.random.default_rng(1))
+        b = sample_uniform(100, np.random.default_rng(1))
+        c = sample_uniform(100, np.random.default_rng(2))
+        self.assertTrue(np.array_equal(a, b))
+        self.assertFalse(np.array_equal(a, c))
+
+    def test_invalid_count(self):
+        for bad in (0, -1, 1.5):
+            with self.assertRaises(ValueError):
+                sample_uniform(bad, np.random.default_rng(1))
+
+
+class TestSpecial(unittest.TestCase):
+    """`special` component: face, edge and vertex directions, exact h and Delta."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.s = _cube_shape()
+        cls.dirs, cls.kind = special_directions(cls.s)
+
+    def test_special_set(self):
+        self.assertEqual(len(self.dirs), 6 + 12 + 8)
+        self.assertEqual([int((self.kind == k).sum()) for k in ("face", "edge", "vertex")], [6, 12, 8])
+        np.testing.assert_allclose(np.linalg.norm(self.dirs, axis=1), 1.0, atol=1e-15)
+
+    def test_exact_h_and_delta_per_kind(self):
+        h = (self.dirs @ self.s.vertices.T).max(axis=1)
+        d = support_gap(self.s, self.dirs)
+        face, edge, vert = (self.kind == "face"), (self.kind == "edge"), (self.kind == "vertex")
+        np.testing.assert_allclose(h[face], 0.5, atol=1e-15)
+        np.testing.assert_allclose(h[edge], math.sqrt(2) / 2, atol=1e-15)
+        np.testing.assert_allclose(h[vert], math.sqrt(3) / 2, atol=1e-15)
+        self.assertLessEqual(d[face].max(), 1e-15)
+        self.assertLessEqual(d[edge].max(), 1e-15)
+        np.testing.assert_allclose(d[vert], 1 / math.sqrt(3), atol=1e-15)
+
+    def test_sampled_special_quaternions(self):
+        rng = np.random.default_rng(SEED)
+        q, which = sample_special(self.s, 3000, rng)
+        self.assertEqual(q.shape, (3000, 4))
+        np.testing.assert_allclose(q, canonicalize_quaternions(q), rtol=0, atol=1e-15)
+        self.assertTrue(np.all(q[:, 0] >= 0.0))
+        u = u_from_quats(q)
+        # the sampled u is exactly (to round-off) the chosen special direction
+        np.testing.assert_allclose(u, self.dirs[which], atol=1e-14)
+        h = np.array([cw.support_height(cw.CUBE_VERTICES, x) for x in q[:300]])
+        ref = (self.dirs[which[:300]] @ self.s.vertices.T).max(axis=1)
+        np.testing.assert_allclose(h, ref, atol=1e-14)
+        # every special direction is drawn
+        self.assertEqual(len(np.unique(which)), len(self.dirs))
+
+    def test_special_spin_and_yaw_vary(self):
+        # same u, different full orientations (spin about u and yaw about z)
+        q, which = sample_special(self.s, 3000, np.random.default_rng(SEED))
+        sel = q[which == which[0]]
+        self.assertGreater(len(sel), 10)
+        self.assertGreater(np.ptp(sel, axis=0).max(), 0.5)
+
+    def test_special_on_tetrahedron(self):
+        s = shape_from_points(TETRA)
+        dirs, kind = special_directions(s)
+        self.assertEqual(len(dirs), 4 + 6 + 4)
+        d = support_gap(s, dirs)
+        self.assertLessEqual(d[kind != "vertex"].max(), 1e-14)
+        self.assertGreater(d[kind == "vertex"].min(), 0.0)
+
+    def test_component_codes(self):
+        self.assertEqual(COMPONENT_CODES, {"uniform": 0, "near_kink": 1, "special": 2})
 
 
 if __name__ == "__main__":
