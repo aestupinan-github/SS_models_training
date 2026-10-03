@@ -10,8 +10,9 @@ fail, implement, run all tests.
   - Files: `generate_dataset.py` (`GenConfig`, `validate_config`, `ConfigError`), `tests/test_generate_dataset.py`.
   - Done when: each invalid case of R02.11 and the size limit raise `ConfigError`; a valid default config passes.
   - Completed 2026-10-03. Covers R02.11 (configuration part: non-positive counts, fractions negative or not summing to 1, ranges outside spec 01, low not below high, missing seed; validation writes nothing) and R02.13 (smoke limit 1e4 rows, refused without `allow_full_scale`). Also fixes the approved default fractions (R02.2, R02.3) as constants. The R02.11 runtime-failure part (non-finite values, reference errors, write failures) belongs to T02.5-T02.7. Tests: 28 new, seen to fail (module missing) before the code; full suite 83 tests OK.
-- [ ] **T02.2 Shape description from a point set.** R02.1, R02.3
+- [x] **T02.2 Shape description from a point set.** R02.1, R02.3
   - Done when: cube gives 6 facets, 12 edges, `R_CIRC` and `H_MIN` equal to `cube_wall` constants.
+  - Completed 2026-10-03. Covers R02.1 (shape-general description from a body-frame point set; hull vertices give the same support height `h(q)` as the full set, so labels can come from the spec 01 reference) and R02.3 (facet normals and edges needed by the `special` and `near_kink` samplers; shape-defined, no cube angles, findings [9, 10, 38]). Also checks spec 01 R01.16 (non-convex point set uses its hull). `shape_from_points` returns a frozen `Shape` with read-only arrays; `ShapeError` for invalid sets (wrong shape, < 4 points, non-finite, degenerate, origin not strictly inside). Tests: 22 new, seen to fail (`Shape` missing) before the code; full suite 105 tests OK.
 - [ ] **T02.3 Orientation sampler: `uniform` and `special`, with spin, yaw and canonicalization.** R02.3
   - Done when: special `Δ` values and `h` values are exact; quaternions canonical; yaw statistics within tolerance.
 - [ ] **T02.4 Orientation sampler: `near_kink` by bisection, and exclusion.** R02.3
