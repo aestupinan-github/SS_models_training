@@ -11,7 +11,13 @@ Implemented so far:
   R02.4, R02.6; D02.4).
 - T02.6, coverage table and acceptance checks (R02.5, R02.12).
 - T02.7, writer, versioning, provenance, seeding (R02.7-R02.10; D02.6).
-Later task T02.8 adds the CLI and summary.
+- T02.8, command line and printed summary (R02.14).
+
+Usage (from the project root):
+    ../env_folder/bin/python -B interactions/ss_cube-wall/python/generate_dataset.py \
+        --n-orient 1250 --k 8 --seed 20261003 [--csv]
+Exit codes: 0 written, 2 invalid configuration (nothing written),
+1 generation or write failure.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
@@ -1151,3 +1157,96 @@ def generate(cfg, out_root, csv=False, points=None):
     shape = shape_from_points(_cube_points() if points is None else points)
     rows, seed_info = generate_rows(cfg, shape)
     return write_dataset(rows, cfg, shape, out_root, seed_info, csv=csv, shape_source=source)
+
+
+# ---------------------------------------------------------------------------
+# T02.8 Command line and summary (R02.14)
+# ---------------------------------------------------------------------------
+
+DEFAULT_OUT_ROOT = os.path.normpath(os.path.join(_HERE, "..", "data"))
+
+
+def format_summary(provenance, path):
+    """Human-readable summary of a written dataset (R02.14)."""
+    p = provenance
+    n = p["n_rows"]
+    cfg = p["config"]
+    kind = "SMOKE dataset" if n <= SMOKE_MAX_ROWS else "FULL-SCALE dataset"
+    lines = [
+        f"{kind} written (software check only, not a scientific result)",
+        f"  path        {path}",
+        f"  rows        {n} = {cfg['n_orient']} orientations x {cfg['k_per_orient']} rows",
+        f"  seed        {p['seed']['master_seed']}",
+        f"  git         {p['git_commit']} (dirty: {p['git_dirty']})",
+        "  components  " + ", ".join(f"{k} {v}" for k, v in p["coverage"]["components"].items()),
+        "  sd parts    " + ", ".join(f"{k} {v}" for k, v in p["coverage"]["sd_parts"].items()),
+        "  coverage (rows per decade)",
+    ]
+    for key, label in (("sd_negative", "|sd|, sd < 0"), ("sd_positive", "|sd|, sd > 0"), ("delta", "Delta")):
+        cells = p["coverage"][key]
+        lines.append(f"    {label:13s} " + "  ".join(f"[{c['lo']:.0e},{c['hi']:.0e}) {c['count']}" for c in cells))
+    lines.append("  acceptance")
+    for name, r in p["acceptance"].items():
+        status = "PASS" if r["passed"] else "FAIL"
+        lines.append(f"    [{status}] {name:13s} failing {r['n_fail']:6d}  worst {r['worst']}  tol {r['tol']}")
+    lines.append("  files       " + ", ".join(f"{k} sha256 {v[:12]}..." for k, v in p["sha256"].items()))
+    return "\n".join(lines)
+
+
+def _parser():
+    import argparse
+    ap = argparse.ArgumentParser(
+        prog="generate_dataset.py",
+        description="Generate an ss_cube-wall training dataset (spec 02). Writes a new "
+                    "dataset_XXX folder; never overwrites.")
+    ap.add_argument("--n-orient", type=int, required=True, help="number of orientations")
+    ap.add_argument("--k", type=int, required=True, help="rows per orientation")
+    ap.add_argument("--seed", type=int, required=True, help="master seed (recorded)")
+    ap.add_argument("--csv", action="store_true", help="also write data.csv (at most 1e4 rows)")
+    ap.add_argument("--allow-full-scale", action="store_true",
+                    help="allow more than 1e4 rows (needs user approval, R02.13)")
+    ap.add_argument("--exclude", metavar="FILE",
+                    help="CSV of quaternions (qw,qx,qy,qz) whose direction u is held out")
+    ap.add_argument("--exclude-angle", type=float, default=0.0, metavar="DEG",
+                    help="exclusion angle in degrees (required with --exclude)")
+    ap.add_argument("--out", default=DEFAULT_OUT_ROOT,
+                    help=f"output root (default: {DEFAULT_OUT_ROOT})")
+    return ap
+
+
+def main(argv=None):
+    """CLI entry point. Returns 0 on success, 2 on invalid input, 1 on generation failure."""
+    import sys
+    ap = _parser()
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as e:                     # argparse errors (e.g. missing --seed) and --help
+        return int(e.code or 0)
+
+    exclude = None
+    if args.exclude is not None:
+        try:
+            exclude = np.atleast_2d(np.loadtxt(args.exclude, delimiter=",", dtype=np.float64))
+        except (OSError, ValueError) as e:
+            print(f"error: cannot read --exclude file {args.exclude}: {e}", file=sys.stderr)
+            return 2
+    cfg = GenConfig(n_orient=args.n_orient, k_per_orient=args.k, seed=args.seed,
+                    exclude_quats=exclude, exclude_angle_deg=args.exclude_angle,
+                    allow_full_scale=args.allow_full_scale)
+    try:
+        path = generate(cfg, args.out, csv=args.csv)
+    except ConfigError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except (GenerationError, ShapeError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    with open(os.path.join(path, "provenance.json")) as f:
+        provenance = json.load(f)
+    print(format_summary(provenance, path))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

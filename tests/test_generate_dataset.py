@@ -10,6 +10,7 @@ T02.5: sd sampler and row assembly with recomputed labels
        (R02.1, R02.2, R02.4, R02.6).
 T02.6: coverage table and acceptance checks (R02.5, R02.12).
 T02.7: writer, versioning, provenance, seeding (R02.7, R02.8, R02.9, R02.10).
+T02.8: CLI and summary (R02.14, R02.11, R02.13).
 """
 
 import csv
@@ -33,6 +34,8 @@ from scipy.spatial.transform import Rotation as R  # noqa: E402
 from generate_dataset import (  # noqa: E402
     ConfigError,
     ACCEPTANCE_CHECKS,
+    format_summary,
+    main,
     SEED_STREAMS,
     generate,
     generate_rows,
@@ -1417,6 +1420,130 @@ class TestGitignore(unittest.TestCase):
                     "interactions/ss_cube-wall/data/.tmp_dataset_004_99/data.npz"):
             r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=REPO_ROOT)
             self.assertEqual(r.returncode, 0, msg=rel)
+
+
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+SCRIPT = os.path.join(REPO_ROOT, "interactions", "ss_cube-wall", "python", "generate_dataset.py")
+PYTHON = sys.executable
+
+
+def _run_main(argv):
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(argv)
+    return code, out.getvalue(), err.getvalue()
+
+
+class TestCli(_TmpRoot):
+    """T02.8: command line (design CLI), exit codes, summary (R02.14)."""
+
+    def args(self, *extra):
+        return ["--n-orient", "125", "--k", "4", "--seed", str(SEED), "--out", self.root, *extra]
+
+    def test_writes_dataset_and_prints_summary(self):
+        code, out, err = _run_main(self.args())
+        self.assertEqual(code, 0, msg=err)
+        self.assertEqual(self.datasets(), ["dataset_001"])
+        path = os.path.join(self.root, "dataset_001")
+        for needle in ("SMOKE", "rows", "500", "uniform", "near_kink", "special",
+                       "penetration", "gap_safety", "coverage", "acceptance", "label", "PASS", path):
+            self.assertIn(needle, out, msg=needle)
+
+    def test_csv_flag(self):
+        code, _, err = _run_main(self.args("--csv"))
+        self.assertEqual(code, 0, msg=err)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.root, "dataset_001"))),
+                         ["data.csv", "data.npz", "provenance.json"])
+
+    def test_same_cli_same_data(self):
+        _run_main(self.args())
+        _run_main(self.args())
+        a, b = (os.path.join(self.root, d, "data.npz") for d in ("dataset_001", "dataset_002"))
+        self.assertEqual(_sha(a), _sha(b))
+
+    def test_missing_seed_is_an_error(self):
+        code, out, err = _run_main(["--n-orient", "125", "--k", "4", "--out", self.root])
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.datasets(), [])
+
+    def test_invalid_config_exit_code_and_message(self):
+        code, out, err = _run_main(["--n-orient", "0", "--k", "4", "--seed", "1", "--out", self.root])
+        self.assertEqual(code, 2)
+        self.assertIn("n_orient", err)
+        self.assertFalse(os.path.exists(self.root) and os.listdir(self.root))
+
+    def test_full_scale_refused_without_flag(self):
+        code, out, err = _run_main(["--n-orient", "1251", "--k", "8", "--seed", "1", "--out", self.root])
+        self.assertEqual(code, 2)
+        self.assertIn("allow_full_scale", err)
+        self.assertEqual(self.datasets(), [])
+
+    def test_exclude_file(self):
+        excl = os.path.join(self._d.name, "excl.csv")
+        np.savetxt(excl, np.array([[1.0, 0, 0, 0], [0.0, 1.0, 0, 0]]), delimiter=",")
+        code, _, err = _run_main(self.args("--exclude", excl, "--exclude-angle", "5"))
+        self.assertEqual(code, 0, msg=err)
+        with open(os.path.join(self.root, "dataset_001", "provenance.json")) as f:
+            p = json.load(f)
+        self.assertEqual(p["config"]["exclude_quats"]["count"], 2)
+        self.assertEqual(p["config"]["exclude_angle_deg"], 5.0)
+        self.assertTrue(p["acceptance"]["exclusion"]["passed"])
+
+    def test_bad_exclude_file(self):
+        code, _, err = _run_main(self.args("--exclude", os.path.join(self._d.name, "missing.csv"),
+                                           "--exclude-angle", "5"))
+        self.assertEqual(code, 2)
+        self.assertEqual(self.datasets(), [])
+
+    def test_generation_error_exit_code(self):
+        import generate_dataset as gd
+        orig = gd.np.savez
+
+        def boom(*a, **k):
+            raise OSError("disk full (simulated)")
+        gd.np.savez = boom
+        try:
+            code, out, err = _run_main(self.args())
+        finally:
+            gd.np.savez = orig
+        self.assertEqual(code, 1)
+        self.assertIn("disk full", err)
+        self.assertEqual(self.datasets(), [])
+
+    def test_default_out_is_interaction_data_folder(self):
+        import generate_dataset as gd
+        self.assertEqual(os.path.normpath(gd.DEFAULT_OUT_ROOT),
+                         os.path.normpath(os.path.join(REPO_ROOT, "interactions", "ss_cube-wall", "data")))
+
+    def test_script_runs_as_program(self):
+        # the real entry point, in a subprocess
+        r = subprocess.run([PYTHON, "-B", SCRIPT, *self.args()], capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertIn("dataset_001", r.stdout)
+        r = subprocess.run([PYTHON, "-B", SCRIPT, "--help"], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0)
+        for opt in ("--n-orient", "--k", "--seed", "--csv", "--allow-full-scale", "--exclude", "--exclude-angle", "--out"):
+            self.assertIn(opt, r.stdout)
+
+
+class TestSummary(unittest.TestCase):
+    """R02.14 summary content."""
+
+    def test_summary_lists_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = _small()
+            path = generate(c, d)
+            with open(os.path.join(path, "provenance.json")) as f:
+                p = json.load(f)
+        text = format_summary(p, path)
+        self.assertIn("SMOKE", text)
+        self.assertIn(str(c.n_rows), text)
+        for name in list(COMPONENT_CODES) + list(SD_PART_CODES) + list(ACCEPTANCE_CHECKS):
+            self.assertIn(name, text, msg=name)
+        self.assertIn(path, text)
+        self.assertIn("not a scientific", text)
 
 
 if __name__ == "__main__":
