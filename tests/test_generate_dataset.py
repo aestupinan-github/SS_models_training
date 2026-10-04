@@ -8,9 +8,11 @@ T02.4: orientation sampler, near_kink by bisection, and exclusion by u
        (R02.3, D02.3).
 T02.5: sd sampler and row assembly with recomputed labels
        (R02.1, R02.2, R02.4, R02.6).
+T02.6: coverage table and acceptance checks (R02.5, R02.12).
 """
 
 import dataclasses
+import json
 import math
 import os
 import sys
@@ -25,7 +27,13 @@ import cube_wall as cw  # noqa: E402
 from scipy.spatial.transform import Rotation as R  # noqa: E402
 from generate_dataset import (  # noqa: E402
     ConfigError,
+    ACCEPTANCE_CHECKS,
     COMPONENT_CODES,
+    COVERAGE_DELTA_RANGE,
+    COVERAGE_SD_RANGE,
+    acceptance_checks,
+    coverage_table,
+    require_acceptance,
     GenerationError,
     ROW_COLUMNS,
     SD_PART_CODES,
@@ -901,6 +909,247 @@ class TestBuildRows(unittest.TestCase):
     def test_length_mismatch(self):
         with self.assertRaises(ValueError):
             build_rows(self.c, self.s, self.q[:-1], self.comp[:-1], self.sd, self.part)
+
+
+def _smoke_rows(**kw):
+    """Default smoke config (1250 x 8 = 10000 rows), assembled rows."""
+    c = cfg(**kw)
+    s = _cube_shape()
+    rng = np.random.default_rng(c.seed)
+    q, comp = sample_orientations(c, s, rng)
+    h = (u_from_quats(q) @ s.vertices.T).max(axis=1)
+    sd, part = sample_sd(c, s, h, rng)
+    return c, s, build_rows(c, s, q, comp, sd, part)
+
+
+def _copy(rows):
+    return {k: v.copy() for k, v in rows.items()}
+
+
+def _row(rows, part):
+    """Index of the first row of a given sd part."""
+    return int(np.flatnonzero(rows["sd_part"] == SD_PART_CODES[part])[0])
+
+
+class TestCoverageTable(unittest.TestCase):
+    """R02.5: rows per decade of |sd| (each sign) and of Delta, per component and per part."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c, cls.s, cls.rows = _smoke_rows()
+        cls.t = coverage_table(cls.rows)
+
+    def test_fixed_ranges_from_requirements(self):
+        self.assertEqual(COVERAGE_SD_RANGE, (1e-5, 1e-1))
+        self.assertEqual(COVERAGE_DELTA_RANGE, (1e-6, 1e-1))
+
+    def test_structure(self):
+        self.assertEqual(set(self.t), {"sd_negative", "sd_positive", "delta", "components", "sd_parts", "n_rows"})
+        self.assertEqual(len(self.t["sd_negative"]), 4)
+        self.assertEqual(len(self.t["sd_positive"]), 4)
+        self.assertEqual(len(self.t["delta"]), 5)
+        self.assertEqual([c["lo"] for c in self.t["sd_positive"]], [1e-5, 1e-4, 1e-3, 1e-2])
+        self.assertEqual([c["hi"] for c in self.t["delta"]], [1e-5, 1e-4, 1e-3, 1e-2, 1e-1])
+
+    def test_counts_match_direct_count(self):
+        sd, d = self.rows["sd"], self.rows["delta"]
+        for cell in self.t["sd_negative"]:
+            lo, hi = cell["lo"], cell["hi"]
+            top = (-sd <= hi) if hi == 1e-1 else (-sd < hi)
+            self.assertEqual(cell["count"], int(((-sd >= lo) & top & (sd < 0)).sum()))
+        for cell in self.t["sd_positive"]:
+            lo, hi = cell["lo"], cell["hi"]
+            top = (sd <= hi) if hi == 1e-1 else (sd < hi)
+            self.assertEqual(cell["count"], int(((sd >= lo) & top).sum()))
+        for cell in self.t["delta"]:
+            lo, hi = cell["lo"], cell["hi"]
+            top = (d <= hi) if hi == 1e-1 else (d < hi)
+            self.assertEqual(cell["count"], int(((d >= lo) & top).sum()))
+
+    def test_decade_boundaries(self):
+        # lower bound inclusive, upper exclusive, except the last decade which includes 0.1
+        n = 8
+        r = {k: v[:n].copy() for k, v in self.rows.items()}
+        r["sd"][:] = [1e-5, 1e-4, 0.1, -0.1, -1e-5, 5e-6, 0.2, 0.0]
+        r["delta"][:] = [1e-6, 1e-5, 0.1, 0.2, 5e-7, 0.0, 1e-6, 1e-6]
+        t = coverage_table(r)
+        self.assertEqual([c["count"] for c in t["sd_positive"]], [1, 1, 0, 1])      # 1e-5, 1e-4, 0.1
+        self.assertEqual([c["count"] for c in t["sd_negative"]], [1, 0, 0, 1])      # -1e-5, -0.1
+        self.assertEqual([c["count"] for c in t["delta"]], [3, 1, 0, 0, 1])         # 1e-6 x3, 1e-5, 0.1
+
+    def test_components_and_parts_sum_to_n_rows(self):
+        self.assertEqual(sum(self.t["components"].values()), self.c.n_rows)
+        self.assertEqual(sum(self.t["sd_parts"].values()), self.c.n_rows)
+        self.assertEqual(set(self.t["components"]), set(COMPONENT_CODES))
+        self.assertEqual(set(self.t["sd_parts"]), set(SD_PART_CODES))
+        self.assertEqual(self.t["n_rows"], self.c.n_rows)
+
+    def test_every_cell_populated_at_smoke_size(self):
+        for key in ("sd_negative", "sd_positive", "delta"):
+            for cell in self.t[key]:
+                self.assertGreater(cell["count"], 0, msg=f"{key} {cell}")
+
+    def test_json_serializable(self):
+        json.dumps(self.t)
+
+    def test_does_not_modify_rows(self):
+        before = _copy(self.rows)
+        coverage_table(self.rows)
+        for k in self.rows:
+            np.testing.assert_array_equal(self.rows[k], before[k])
+
+
+class TestAcceptanceChecks(unittest.TestCase):
+    """R02.12: each check passes on generated rows and fails on a corrupted row."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c, cls.s, cls.rows = _smoke_rows()
+        cls.res = acceptance_checks(cls.rows, cls.c, cls.s)
+
+    def test_names(self):
+        self.assertEqual(ACCEPTANCE_CHECKS, ("label", "h_consistent", "ranges", "prefilter", "finite",
+                                             "unit_norm", "canonical", "coverage", "exclusion"))
+        self.assertEqual(tuple(self.res), ACCEPTANCE_CHECKS)
+
+    def test_all_pass_on_generated_rows(self):
+        for name, r in self.res.items():
+            self.assertTrue(r["passed"], msg=f"{name}: {r}")
+            self.assertEqual(r["n_fail"], 0, msg=name)
+        self.assertIsNone(require_acceptance(self.res))
+
+    def test_result_fields_json_serializable(self):
+        for r in self.res.values():
+            self.assertEqual(set(r), {"passed", "n_fail", "worst", "tol"})
+            self.assertIsInstance(r["passed"], bool)
+            self.assertIsInstance(r["n_fail"], int)
+        json.dumps(self.res)
+
+    def test_label_worst_is_round_off(self):
+        self.assertLessEqual(self.res["label"]["worst"], 1e-15)
+
+    def corrupt(self, mutate, cfg_=None):
+        r = _copy(self.rows)
+        mutate(r)
+        return acceptance_checks(r, cfg_ or self.c, self.s)
+
+    def assertOnlyFails(self, res, names, n_fail=1):
+        for name, r in res.items():
+            if name in names:
+                self.assertFalse(r["passed"], msg=name)
+                if n_fail is not None:
+                    self.assertEqual(r["n_fail"], n_fail, msg=name)
+            else:
+                self.assertTrue(r["passed"], msg=f"{name} should pass: {r}")
+
+    def test_label_corrupted(self):
+        def m(r):
+            r["sd"][17] += 1e-10
+        res = self.corrupt(m)
+        self.assertOnlyFails(res, {"label"})
+        self.assertAlmostEqual(res["label"]["worst"], 1e-10, delta=1e-15)
+
+    def test_consistently_wrong_h_is_caught(self):
+        # h and sd shifted together (position_z - h still equals sd): the check
+        # must recompute h independently from the quaternion
+        def m(r):
+            r["h"][5] += 1e-9
+            r["sd"][5] -= 1e-9
+        self.assertOnlyFails(self.corrupt(m), {"label", "h_consistent"})
+
+    def test_range_corrupted(self):
+        def m(r):
+            i = _row(r, "penetration")
+            r["sd"][i] = -0.2
+            r["position_z"][i] = r["h"][i] - 0.2
+        self.assertOnlyFails(self.corrupt(m), {"ranges"})
+
+    def test_part_range_corrupted(self):
+        # a gap row with a value in the near-contact band violates its part range
+        def m(r):
+            i = _row(r, "gap")
+            r["sd"][i] = 1e-7
+            r["position_z"][i] = r["h"][i] + 1e-7
+        self.assertOnlyFails(self.corrupt(m), {"ranges"})
+
+    def test_exact_contact_must_be_zero(self):
+        def m(r):
+            i = _row(r, "exact_contact")
+            r["sd"][i] = 1e-16
+            r["position_z"][i] = r["h"][i] + 1e-16
+        res = self.corrupt(m)
+        self.assertFalse(res["ranges"]["passed"])
+
+    def test_above_prefilter_corrupted(self):
+        def m(r):
+            i = _row(r, "gap_safety")
+            r["position_z"][i] = cw.Z_PREFILTER + 1e-3
+            r["sd"][i] = r["position_z"][i] - r["h"][i]
+        res = self.corrupt(m)
+        self.assertFalse(res["prefilter"]["passed"])
+        self.assertEqual(res["prefilter"]["n_fail"], 1)
+        self.assertTrue(res["label"]["passed"])
+
+    def test_non_finite_corrupted(self):
+        def m(r):
+            r["delta"][3] = np.nan
+        res = self.corrupt(m)
+        self.assertFalse(res["finite"]["passed"])
+        self.assertEqual(res["finite"]["n_fail"], 1)
+
+    def test_unit_norm_corrupted(self):
+        def m(r):
+            for k in ("qw", "qx", "qy", "qz"):
+                r[k][9] *= 1.0 + 1e-9
+        res = self.corrupt(m)
+        self.assertFalse(res["unit_norm"]["passed"])
+        self.assertEqual(res["unit_norm"]["n_fail"], 1)
+        self.assertTrue(res["label"]["passed"])   # same rotation
+
+    def test_canonical_corrupted(self):
+        def m(r):
+            for k in ("qw", "qx", "qy", "qz"):
+                r[k][11] = -r[k][11]               # -q: same rotation, not canonical
+        self.assertOnlyFails(self.corrupt(m), {"canonical"})
+
+    def test_coverage_below_m_min(self):
+        res = acceptance_checks(self.rows, cfg(m_min=10**6), self.s)
+        self.assertFalse(res["coverage"]["passed"])
+        self.assertEqual(res["coverage"]["n_fail"], 13)       # 4 + 4 + 5 decade cells
+        self.assertTrue(all(r["passed"] for n, r in res.items() if n != "coverage"))
+
+    def test_exclusion_violated(self):
+        i = 40
+        q = np.array([[self.rows[k][i] for k in ("qw", "qx", "qy", "qz")]])
+        res = acceptance_checks(self.rows, cfg(exclude_quats=q, exclude_angle_deg=1.0), self.s)
+        self.assertFalse(res["exclusion"]["passed"])
+        self.assertGreaterEqual(res["exclusion"]["n_fail"], self.c.k_per_orient)
+
+    def test_does_not_modify_rows(self):
+        before = _copy(self.rows)
+        acceptance_checks(self.rows, self.c, self.s)
+        for k in self.rows:
+            np.testing.assert_array_equal(self.rows[k], before[k])
+
+    def test_require_acceptance_raises_with_names(self):
+        def m(r):
+            r["sd"][17] += 1e-10
+            for k in ("qw", "qx", "qy", "qz"):
+                r[k][11] = -r[k][11]
+        with self.assertRaises(GenerationError) as ctx:
+            require_acceptance(self.corrupt(m))
+        self.assertIn("label", str(ctx.exception))
+        self.assertIn("canonical", str(ctx.exception))
+
+    def test_malformed_rows(self):
+        r = _copy(self.rows)
+        del r["delta"]
+        with self.assertRaises(ValueError):
+            acceptance_checks(r, self.c, self.s)
+        r = _copy(self.rows)
+        r["sd"] = r["sd"][:-1]
+        with self.assertRaises(ValueError):
+            acceptance_checks(r, self.c, self.s)
 
 
 if __name__ == "__main__":

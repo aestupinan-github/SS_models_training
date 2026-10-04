@@ -9,7 +9,8 @@ Implemented so far:
   exclusion by body-frame direction u (R02.3, D02.3).
 - T02.5, sd sampler and row assembly with recomputed labels (R02.1, R02.2,
   R02.4, R02.6; D02.4).
-Later tasks (T02.6-T02.8) add checks, writer and CLI.
+- T02.6, coverage table and acceptance checks (R02.5, R02.12).
+Later tasks (T02.7-T02.8) add the writer and CLI.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
@@ -735,3 +736,169 @@ def build_rows(cfg, shape, quats, component, sd, sd_part):
         if not np.all(np.isfinite(rows[name])):
             raise GenerationError(f"non-finite value in column '{name}'")
     return {name: rows[name] for name in ROW_COLUMNS}
+
+
+# ---------------------------------------------------------------------------
+# T02.6 Coverage table and acceptance checks (R02.5, R02.12)
+# ---------------------------------------------------------------------------
+
+# Decade ranges of the coverage table, fixed by R02.5.
+COVERAGE_SD_RANGE = (1e-5, 1e-1)
+COVERAGE_DELTA_RANGE = (1e-6, 1e-1)
+
+# Tolerances of R02.12.
+LABEL_TOL = 1e-12
+UNIT_NORM_TOL = 1e-12
+
+# Order of the acceptance checks (R02.12).
+ACCEPTANCE_CHECKS = ("label", "h_consistent", "ranges", "prefilter", "finite",
+                     "unit_norm", "canonical", "coverage", "exclusion")
+
+
+def _check_rows(rows):
+    missing = [c for c in ROW_COLUMNS if c not in rows]
+    if missing:
+        raise ValueError(f"rows are missing columns {missing}")
+    n = len(rows[ROW_COLUMNS[0]])
+    bad = [c for c in ROW_COLUMNS if np.shape(rows[c]) != (n,)]
+    if bad:
+        raise ValueError(f"columns {bad} do not have shape ({n},)")
+    return n
+
+
+def _decades(lo, hi):
+    """Decade cells [10^k, 10^(k+1)) covering [lo, hi]; lo and hi are powers of 10."""
+    k0, k1 = int(round(math.log10(lo))), int(round(math.log10(hi)))
+    return [(10.0 ** k, 10.0 ** (k + 1)) for k in range(k0, k1)]
+
+
+def _decade_counts(values, lo, hi):
+    """Counts per decade; lower bound inclusive, upper exclusive, last decade includes hi."""
+    v = np.asarray(values, dtype=np.float64)
+    cells = []
+    edges = _decades(lo, hi)
+    for i, (a, b) in enumerate(edges):
+        top = (v <= b) if i == len(edges) - 1 else (v < b)
+        cells.append({"lo": a, "hi": b, "count": int(np.count_nonzero((v >= a) & top))})
+    return cells
+
+
+def coverage_table(rows):
+    """Coverage table of R02.5 (JSON-serializable dict).
+
+    sd_negative / sd_positive: rows per decade of |sd| over [1e-5, 1e-1] for
+    each sign; delta: rows per decade of the support gap over [1e-6, 1e-1];
+    components / sd_parts: rows per component and per sd part.
+    """
+    n = _check_rows(rows)
+    sd = np.asarray(rows["sd"], dtype=np.float64)
+    comp = np.asarray(rows["component"])
+    part = np.asarray(rows["sd_part"])
+    return {
+        "n_rows": int(n),
+        "sd_negative": _decade_counts(np.where(sd < 0.0, -sd, np.nan), *COVERAGE_SD_RANGE),
+        "sd_positive": _decade_counts(np.where(sd > 0.0, sd, np.nan), *COVERAGE_SD_RANGE),
+        "delta": _decade_counts(rows["delta"], *COVERAGE_DELTA_RANGE),
+        "components": {name: int(np.count_nonzero(comp == code)) for name, code in COMPONENT_CODES.items()},
+        "sd_parts": {name: int(np.count_nonzero(part == code)) for name, code in SD_PART_CODES.items()},
+    }
+
+
+def _result(n_fail, worst, tol):
+    worst = float(worst)
+    return {"passed": bool(n_fail == 0), "n_fail": int(n_fail),
+            "worst": worst if math.isfinite(worst) else None, "tol": tol}
+
+
+def _nan_max(a):
+    a = np.asarray(a, dtype=np.float64)
+    a = a[np.isfinite(a)]
+    return float(a.max()) if a.size else 0.0
+
+
+def acceptance_checks(rows, cfg, shape):
+    """Acceptance checks of R02.12. Returns {name: {passed, n_fail, worst, tol}}.
+
+    Pure function: does not modify `rows` and writes nothing. `h_ref` is
+    recomputed independently from the stored quaternions, so a row whose h
+    and sd are wrong together is still caught.
+    """
+    n = _check_rows(rows)
+    P = SD_PART_CODES
+    f64 = {c: np.asarray(rows[c], dtype=np.float64)
+           for c in ("position_z", "qw", "qx", "qy", "qz", "sd", "h", "delta")}
+    q = np.stack([f64["qw"], f64["qx"], f64["qy"], f64["qz"]], axis=1)
+    sd, z, part = f64["sd"], f64["position_z"], np.asarray(rows["sd_part"])
+    res = {}
+
+    # finite (first: other checks skip non-finite rows rather than crash)
+    finite_rows = np.all(np.isfinite(np.stack(list(f64.values()), axis=1)), axis=1)
+    res["finite"] = _result(np.count_nonzero(~finite_rows), 0.0, 0.0)
+    qn = np.linalg.norm(q, axis=1)
+    usable = finite_rows & (qn > 0.0)
+
+    # label: |sd - (position_z - h_ref)| with h_ref from the stored quaternion
+    h_ref = np.full(n, np.nan)
+    if np.any(usable):
+        qu = q[usable] / qn[usable, None]
+        h_ref[usable] = (u_from_quats(qu) @ shape.vertices.T).max(axis=1)
+    err = np.abs(sd - (z - h_ref))
+    res["label"] = _result(np.count_nonzero(~(err <= LABEL_TOL)), _nan_max(err), LABEL_TOL)
+    err_h = np.abs(f64["h"] - h_ref)
+    res["h_consistent"] = _result(np.count_nonzero(~(err_h <= LABEL_TOL)), _nan_max(err_h), LABEL_TOL)
+
+    # ranges per sd part (R02.2)
+    lo = cfg.sd_log_min
+    z_pre = shape.r_circ + SD_ACCURACY_MAX
+    ok = np.zeros(n, dtype=bool)
+    m = part == P["penetration"]
+    ok[m] = (sd[m] >= -SD_ACCURACY_MAX) & (sd[m] <= -lo)
+    m = part == P["gap"]
+    ok[m] = (sd[m] >= lo) & (sd[m] <= SD_ACCURACY_MAX)
+    m = part == P["near_contact"]
+    ok[m] = (sd[m] > -lo) & (sd[m] < lo)
+    m = part == P["exact_contact"]
+    ok[m] = sd[m] == 0.0
+    m = part == P["gap_safety"]
+    ok[m] = (sd[m] > SD_ACCURACY_MAX) & (z[m] <= z_pre)
+    # global range: nothing deeper than -0.1 (R02.2)
+    ok &= sd >= -SD_ACCURACY_MAX
+    out = np.maximum(-SD_ACCURACY_MAX - sd, 0.0)
+    res["ranges"] = _result(np.count_nonzero(~ok), _nan_max(out), 0.0)
+
+    # pre-filter: no row above Z_PREFILTER (R02.2)
+    above = z - z_pre
+    res["prefilter"] = _result(np.count_nonzero(~(above <= 0.0)), max(_nan_max(above), 0.0), 0.0)
+
+    # unit norm and canonical form (R01.4)
+    nerr = np.abs(qn - 1.0)
+    res["unit_norm"] = _result(np.count_nonzero(~(nerr <= UNIT_NORM_TOL)), _nan_max(nerr), UNIT_NORM_TOL)
+    canon_bad = np.ones(n, dtype=bool)
+    if np.any(usable):
+        c = canonicalize_quaternions(q[usable])
+        canon_bad[usable] = np.abs(c - q[usable] / qn[usable, None]).max(axis=1) > UNIT_NORM_TOL
+    res["canonical"] = _result(np.count_nonzero(canon_bad), 0.0, UNIT_NORM_TOL)
+
+    # coverage: every decade cell >= m_min (R02.5)
+    table = coverage_table(rows)
+    cells = table["sd_negative"] + table["sd_positive"] + table["delta"]
+    short = [cell for cell in cells if cell["count"] < cfg.m_min]
+    res["coverage"] = _result(len(short), min(cell["count"] for cell in cells), cfg.m_min)
+
+    # exclusion by u (D02.3)
+    if cfg.exclude_quats is None:
+        res["exclusion"] = _result(0, 0.0, cfg.exclude_angle_deg)
+    else:
+        excl = np.zeros(n, dtype=bool)
+        excl[usable] = exclusion_mask(q[usable] / qn[usable, None], cfg.exclude_quats, cfg.exclude_angle_deg)
+        res["exclusion"] = _result(np.count_nonzero(excl), 0.0, cfg.exclude_angle_deg)
+
+    return {name: res[name] for name in ACCEPTANCE_CHECKS}
+
+
+def require_acceptance(results):
+    """Raise GenerationError naming every failed check (R02.11: failures abort the write)."""
+    failed = [f"{name} ({r['n_fail']} failing, worst {r['worst']})"
+              for name, r in results.items() if not r["passed"]]
+    if failed:
+        raise GenerationError("acceptance checks failed: " + "; ".join(failed))
