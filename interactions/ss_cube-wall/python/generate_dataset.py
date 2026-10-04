@@ -5,8 +5,9 @@ Implemented so far:
 - T02.2, shape description from a point set (R02.1, R02.3).
 - T02.3, orientation sampler: uniform and special, with spin, yaw and
   canonicalization (R02.3).
-Later tasks (T02.4-T02.8) add near_kink and exclusion, rows, checks, writer
-and CLI.
+- T02.4, orientation sampler: near_kink by bisection on a tilt angle, and
+  exclusion by body-frame direction u (R02.3, D02.3).
+Later tasks (T02.5-T02.8) add rows, checks, writer and CLI.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
@@ -386,17 +387,22 @@ def _spin_and_yaw(rot0, u, rng):
     return yaw * rot0 * spin
 
 
-def sample_uniform(n, rng):
-    """`uniform` component: n canonical quaternions, Haar measure on SO(3), then yaw.
-
-    The yaw does not change the distribution (Haar is invariant) but is applied
-    for uniformity with the other components (design).
-    """
-    _check_count(n)
+def _uniform_batch(n, rng):
     rot = Rotation.random(n, random_state=rng)
     psi = rng.uniform(0.0, 2.0 * np.pi, n)
     rot = Rotation.from_rotvec(np.outer(psi, [0.0, 0.0, 1.0])) * rot
     return canonicalize_quaternions(_from_scipy(rot))
+
+
+def sample_uniform(n, rng, exclude_quats=None, exclude_angle_deg=0.0):
+    """`uniform` component: n canonical quaternions, Haar measure on SO(3), then yaw.
+
+    The yaw does not change the distribution (Haar is invariant) but is applied
+    for uniformity with the other components (design). Excluded directions
+    (D02.3) are redrawn.
+    """
+    _check_count(n)
+    return _draw_with_exclusion(lambda m: (_uniform_batch(m, rng),), n, exclude_quats, exclude_angle_deg)[0]
 
 
 def special_directions(shape):
@@ -416,16 +422,153 @@ def special_directions(shape):
     return dirs, kind
 
 
-def sample_special(shape, n, rng):
+def sample_special(shape, n, rng, exclude_quats=None, exclude_angle_deg=0.0):
     """`special` component: n orientations whose u is a special direction.
 
-    Directions are drawn uniformly from the finite set, then random spin about
-    u and yaw about world z are applied (design). Returns (quats (n, 4)
-    canonical, which (n,) index into special_directions(shape)).
+    Directions are drawn uniformly from the finite set of directions that are
+    not excluded (D02.3), then random spin about u and yaw about world z are
+    applied (design). Returns (quats (n, 4) canonical, which (n,) index into
+    special_directions(shape)). Raises ValueError if every special direction
+    is excluded.
     """
     _check_count(n)
     dirs, _ = special_directions(shape)
-    which = rng.integers(0, len(dirs), n)
+    allowed = np.arange(len(dirs))
+    if exclude_quats is not None:
+        allowed = allowed[~_u_excluded(dirs, exclude_quats, exclude_angle_deg)]
+        if len(allowed) == 0:
+            raise ValueError("every special direction is excluded; cannot sample the special component")
+    which = allowed[rng.integers(0, len(allowed), n)]
     u = dirs[which]
     rot = _spin_and_yaw(rotation_from_u(u), u, rng)
     return canonicalize_quaternions(_from_scipy(rot)), which
+
+
+# ---------------------------------------------------------------------------
+# T02.4 near_kink sampler and exclusion by u (R02.3, D02.3)
+# ---------------------------------------------------------------------------
+
+# Tilt-angle bracket and bisection steps for near_kink (design).
+NEAR_KINK_THETA_MAX = 0.5
+NEAR_KINK_BISECTION_STEPS = 60
+# Safety bound on redraw rounds (exclusion, unreachable targets).
+MAX_REDRAW_ROUNDS = 1000
+
+
+def _u_excluded(u, exclude_quats, exclude_angle_deg):
+    """True where body direction u is within exclude_angle_deg of an excluded u (D02.3)."""
+    u = np.asarray(u, dtype=np.float64)
+    if exclude_quats is None:
+        return np.zeros(len(u), dtype=bool)
+    u_ex = u_from_quats(canonicalize_quaternions(exclude_quats))
+    ang = np.degrees(np.arccos(np.clip(u @ u_ex.T, -1.0, 1.0)))
+    return np.any(ang < exclude_angle_deg, axis=1)
+
+
+def exclusion_mask(q, exclude_quats, exclude_angle_deg):
+    """True for each quaternion whose u is within the exclusion angle of an excluded u (D02.3).
+
+    Exclusion is by body-frame direction u, not by full orientation: sd depends
+    only on u, and spin and yaw would otherwise leave the same sd in training.
+    """
+    q = np.asarray(q, dtype=np.float64)
+    if exclude_quats is None:
+        return np.zeros(len(q), dtype=bool)
+    return _u_excluded(u_from_quats(q), exclude_quats, exclude_angle_deg)
+
+
+def _draw_with_exclusion(draw, n, exclude_quats, exclude_angle_deg):
+    """Call draw(m) -> tuple of arrays (first is quats) until n non-excluded rows are kept."""
+    parts = None
+    have = 0
+    need = n
+    for _ in range(MAX_REDRAW_ROUNDS):
+        out = draw(need)
+        keep = ~exclusion_mask(out[0], exclude_quats, exclude_angle_deg)
+        out = tuple(a[keep] for a in out)
+        parts = out if parts is None else tuple(np.concatenate([p, a]) for p, a in zip(parts, out))
+        have = len(parts[0])
+        if have >= n:
+            return tuple(a[:n] for a in parts)
+        need = n - have
+    raise ValueError(f"could not draw {n} non-excluded orientations in {MAX_REDRAW_ROUNDS} rounds "
+                     f"(kept {have}); exclusion too large?")
+
+
+def _near_kink_starts(shape, n, rng):
+    """Start directions u0 on the kink set and unit tilt directions w (design).
+
+    Half the rows (alternating) use face mode: u0 = a facet normal, w random
+    and perpendicular to u0. The others use edge mode: u0 uniform in arc angle
+    on the great arc between the two facet normals of an edge, w = +/- (n_i x
+    n_j) normalized (perpendicular to the arc).
+    """
+    normals = np.asarray(shape.facet_normals)
+    u0 = np.empty((n, 3))
+    w = np.empty((n, 3))
+    face = (np.arange(n) % 2) == 0
+    nf = int(face.sum())
+    ne = n - nf
+
+    f = rng.integers(0, len(normals), nf)
+    u0f = normals[f]
+    wf = rng.normal(size=(nf, 3))
+    wf -= np.sum(wf * u0f, axis=1, keepdims=True) * u0f
+    u0[face] = u0f
+    w[face] = wf
+
+    if ne:
+        e = rng.integers(0, len(shape.edge_facets), ne)
+        pairs = np.asarray(shape.edge_facets)[e]
+        n1, n2 = normals[pairs[:, 0]], normals[pairs[:, 1]]
+        a = np.arccos(np.clip(np.sum(n1 * n2, axis=1), -1.0, 1.0))
+        x = rng.uniform(0.0, 1.0, ne) * a
+        u0e = (np.sin(a - x)[:, None] * n1 + np.sin(x)[:, None] * n2) / np.sin(a)[:, None]
+        we = np.cross(n1, n2) * rng.choice([-1.0, 1.0], ne)[:, None]
+        u0[~face] = u0e
+        w[~face] = we
+
+    u0 /= np.linalg.norm(u0, axis=1, keepdims=True)
+    w /= np.linalg.norm(w, axis=1, keepdims=True)
+    return u0, w
+
+
+def _near_kink_batch(shape, n, rng, delta_range):
+    """One batch: targets, bisection on theta; drops rows whose bracket misses the target."""
+    lo_d, hi_d = delta_range
+    target = 10.0 ** rng.uniform(np.log10(lo_d), np.log10(hi_d), n)
+    u0, w = _near_kink_starts(shape, n, rng)
+
+    def u_at(theta):
+        return np.cos(theta)[:, None] * u0 + np.sin(theta)[:, None] * w
+
+    lo = np.zeros(n)
+    hi = np.full(n, NEAR_KINK_THETA_MAX)
+    reach = support_gap(shape, u_at(hi)) >= target
+    for _ in range(NEAR_KINK_BISECTION_STEPS):
+        mid = 0.5 * (lo + hi)
+        below = support_gap(shape, u_at(mid)) < target
+        lo = np.where(below, mid, lo)
+        hi = np.where(below, hi, mid)
+
+    u = u_at(hi)[reach]
+    target = target[reach]
+    rot = _spin_and_yaw(rotation_from_u(u), u, rng)
+    return canonicalize_quaternions(_from_scipy(rot)), target
+
+
+def sample_near_kink(shape, n, rng, delta_range=(1e-6, 1e-1), exclude_quats=None, exclude_angle_deg=0.0):
+    """`near_kink` component: n orientations with support gap log-uniform in delta_range.
+
+    Starts on the non-smooth set of h (facet normals and edge arcs, shape
+    defined), tilts by theta in [0, 0.5] and bisects theta (60 steps) so that
+    Delta(u) equals the target. Rows whose bracket cannot reach the target,
+    and excluded rows (D02.3), are redrawn. Returns (quats (n, 4) canonical,
+    target Delta (n,)).
+    """
+    _check_count(n)
+    lo_d, hi_d = delta_range
+    if not (math.isfinite(lo_d) and math.isfinite(hi_d) and 0.0 < lo_d < hi_d):
+        raise ValueError(f"delta_range must satisfy 0 < low < high, got {delta_range!r}")
+    return _draw_with_exclusion(lambda m: _near_kink_batch(shape, m, rng, delta_range),
+                                n, exclude_quats, exclude_angle_deg)

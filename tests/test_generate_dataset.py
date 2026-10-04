@@ -4,6 +4,8 @@ T02.1: configuration and validation (R02.11, R02.13).
 T02.2: shape description from a point set (R02.1, R02.3).
 T02.3: orientation sampler, uniform and special, with spin, yaw and
        canonicalization (R02.3).
+T02.4: orientation sampler, near_kink by bisection, and exclusion by u
+       (R02.3, D02.3).
 """
 
 import dataclasses
@@ -25,7 +27,9 @@ from generate_dataset import (  # noqa: E402
     Shape,
     ShapeError,
     canonicalize_quaternions,
+    exclusion_mask,
     rotation_from_u,
+    sample_near_kink,
     sample_special,
     sample_uniform,
     shape_from_points,
@@ -522,6 +526,145 @@ class TestSpecial(unittest.TestCase):
 
     def test_component_codes(self):
         self.assertEqual(COMPONENT_CODES, {"uniform": 0, "near_kink": 1, "special": 2})
+
+
+class TestNearKink(unittest.TestCase):
+    """`near_kink` component: target support gap by bisection on a tilt angle."""
+
+    N = 20000
+
+    @classmethod
+    def setUpClass(cls):
+        cls.s = _cube_shape()
+        cls.q, cls.target = sample_near_kink(cls.s, cls.N, np.random.default_rng(SEED))
+        cls.delta = support_gap(cls.s, u_from_quats(cls.q))
+
+    def test_shapes_and_canonical(self):
+        self.assertEqual(self.q.shape, (self.N, 4))
+        self.assertEqual(self.target.shape, (self.N,))
+        np.testing.assert_allclose(self.q, canonicalize_quaternions(self.q), rtol=0, atol=1e-15)
+        self.assertTrue(np.all(self.q[:, 0] >= 0.0))
+
+    def test_achieved_delta_matches_target(self):
+        # Done-when: within 1e-9 relative of target (measured worst 6.5e-10 incl. quaternion chain)
+        rel = np.abs(self.delta - self.target) / self.target
+        self.assertLess(rel.max(), 1e-9)
+
+    def test_targets_in_range_and_log_uniform(self):
+        lo, hi = 1e-6, 1e-1
+        self.assertGreaterEqual(self.target.min(), lo)
+        self.assertLessEqual(self.target.max(), hi)
+        # log-uniform: each decade holds about 1/5 of the targets
+        counts = [int(((self.target >= a) & (self.target < 10 * a)).sum()) for a in 10.0 ** np.arange(-6, -1)]
+        for c in counts:
+            self.assertGreater(c, 0.8 * self.N / 5)
+            self.assertLess(c, 1.2 * self.N / 5)
+
+    def test_every_decade_populated(self):
+        for a in 10.0 ** np.arange(-6, -1):
+            self.assertGreater(int(((self.delta >= a) & (self.delta < 10 * a)).sum()), 0, msg=f"decade {a}")
+
+    def test_near_faces_and_edges(self):
+        # Cube kink set: the great circles u_i = 0 (edges), crossing at the faces.
+        # Edge mode starts anywhere on an edge arc (uniform in arc angle), so
+        # "near an edge" means near a circle, away from the faces.
+        # Measured: all rows near a circle (uniform SO(3): 28%), 55% near a face
+        # (uniform: 3%), 45% on a circle away from faces.
+        u = np.sort(np.abs(u_from_quats(self.q)), axis=1)
+        near_circle = u[:, 0] < 0.1
+        near_face = u[:, 2] > 0.99
+        self.assertGreater(near_circle.mean(), 0.99)
+        self.assertGreater(near_face.mean(), 0.4)
+        self.assertGreater((near_circle & ~near_face).mean(), 0.3)
+
+    def test_custom_delta_range(self):
+        q, t = sample_near_kink(self.s, 500, np.random.default_rng(1), delta_range=(1e-4, 1e-3))
+        self.assertTrue(np.all((t >= 1e-4) & (t <= 1e-3)))
+        d = support_gap(self.s, u_from_quats(q))
+        self.assertLess((np.abs(d - t) / t).max(), 1e-9)
+
+    def test_reproducible(self):
+        a = sample_near_kink(self.s, 200, np.random.default_rng(3))
+        b = sample_near_kink(self.s, 200, np.random.default_rng(3))
+        c = sample_near_kink(self.s, 200, np.random.default_rng(4))
+        self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
+        self.assertFalse(np.array_equal(a[0], c[0]))
+
+    def test_tetrahedron(self):
+        # Shape-general check. The 1e-9 relative criterion is for the cube; on the
+        # tetrahedron (r_circ = 1.73) round-off of the quaternion chain gives an
+        # absolute error of about 2e-15 (measured worst relative 1.5e-9 at 1.2e-6).
+        s = shape_from_points(TETRA)
+        q, t = sample_near_kink(s, 2000, np.random.default_rng(SEED))
+        d = support_gap(s, u_from_quats(q))
+        self.assertLess(np.abs(d - t).max(), 1e-14)
+        self.assertLess((np.abs(d - t) / t).max(), 1e-8)
+
+    def test_invalid(self):
+        with self.assertRaises(ValueError):
+            sample_near_kink(self.s, 0, np.random.default_rng(1))
+        for bad in ((0.0, 1e-1), (1e-3, 1e-4)):
+            with self.assertRaises(ValueError):
+                sample_near_kink(self.s, 10, np.random.default_rng(1), delta_range=bad)
+
+
+class TestExclusion(unittest.TestCase):
+    """Exclusion by body-frame direction u (D02.3)."""
+
+    def test_mask_by_u_angle(self):
+        excl = np.array([[1.0, 0, 0, 0]])                  # u = (0, 0, 1)... of identity
+        u_ex = u_from_quats(excl)[0]
+        rng = np.random.default_rng(SEED)
+        q = sample_uniform(20000, rng)
+        u = u_from_quats(q)
+        ang = np.degrees(np.arccos(np.clip(u @ u_ex, -1, 1)))
+        m = exclusion_mask(q, excl, 10.0)
+        self.assertTrue(np.array_equal(m, ang < 10.0))
+        self.assertGreater(m.sum(), 0)
+
+    def test_mask_ignores_spin_and_yaw(self):
+        # an excluded orientation excludes every orientation with the same u
+        s = _cube_shape()
+        excl, _ = sample_special(s, 1, np.random.default_rng(1))
+        u = u_from_quats(excl)
+        same_u = canonicalize_quaternions(_from_rot(rotation_from_u(np.repeat(u, 50, axis=0)), u, 50))
+        self.assertTrue(np.all(exclusion_mask(same_u, excl, 0.01)))
+
+    def test_mask_none(self):
+        q = sample_uniform(10, np.random.default_rng(1))
+        self.assertFalse(np.any(exclusion_mask(q, None, 0.0)))
+
+    def test_samplers_respect_exclusion(self):
+        s = _cube_shape()
+        rng = np.random.default_rng(SEED)
+        excl = np.vstack([sample_special(s, 3, rng)[0], sample_uniform(3, rng)])
+        u_ex = u_from_quats(excl)
+        angle = 15.0
+        for name, q in (
+            ("uniform", sample_uniform(5000, np.random.default_rng(1), exclude_quats=excl, exclude_angle_deg=angle)),
+            ("special", sample_special(s, 2000, np.random.default_rng(2), exclude_quats=excl, exclude_angle_deg=angle)[0]),
+            ("near_kink", sample_near_kink(s, 2000, np.random.default_rng(3), exclude_quats=excl, exclude_angle_deg=angle)[0]),
+        ):
+            u = u_from_quats(q)
+            ang = np.degrees(np.arccos(np.clip(u @ u_ex.T, -1, 1))).min(axis=1)
+            self.assertEqual(len(q), {"uniform": 5000, "special": 2000, "near_kink": 2000}[name])
+            self.assertGreaterEqual(ang.min(), angle, msg=name)
+
+    def test_all_excluded_special_raises(self):
+        # every special direction excluded -> cannot sample: error, not an endless loop
+        s = _cube_shape()
+        excl = sample_special(s, 400, np.random.default_rng(5))[0]
+        with self.assertRaises(ValueError):
+            sample_special(s, 10, np.random.default_rng(6), exclude_quats=excl, exclude_angle_deg=1.0)
+
+
+def _from_rot(rot0, u, n):
+    """Helper: n orientations with the same u, different spin and yaw."""
+    rng = np.random.default_rng(99)
+    phi = rng.uniform(0, 2 * np.pi, n)
+    psi = rng.uniform(0, 2 * np.pi, n)
+    rot = R.from_rotvec(np.outer(psi, [0, 0, 1.0])) * rot0 * R.from_rotvec(np.repeat(u, n, axis=0) * phi[:, None])
+    return rot.as_quat()[:, [3, 0, 1, 2]]
 
 
 if __name__ == "__main__":

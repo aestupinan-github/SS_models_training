@@ -157,6 +157,15 @@ the target `Δ` within relative error `2e-10`, about 1e4 rows per `Δ` decade
 over `[1e-6, 1e-1]`. In 1.7% of samples the bracket `θ ≤ 0.5` does not reach
 `Δ*` (large targets); those samples are redrawn.
 
+*Confirmed* (T02.4, measured, cube, 20000 samples): including the full
+quaternion chain (spin, yaw, canonicalization), worst relative `Δ` error is
+6.5e-10, absolute below 1e-15. Edge-mode starts are uniform along the whole
+arc between two face normals, so they also land near faces: 55% of
+`near_kink` rows are within `|u|_max > 0.99` of a face and 45% lie on a kink
+circle away from faces (uniform SO(3): 3% and 28% near a circle). For a
+shape larger than the cube (tetrahedron, `r_circ = 1.73`) the same absolute
+round-off gives up to 1.5e-9 relative at `Δ ≈ 1e-6`.
+
 Exclusion (D02.3): for each excluded quaternion compute its `u`. A sampled
 orientation is redrawn if `arccos(u · u_excl) < exclude_angle_deg` for any
 excluded `u_excl`. Symmetric images, if wanted, are listed explicitly by
