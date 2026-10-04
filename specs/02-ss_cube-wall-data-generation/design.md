@@ -52,6 +52,23 @@ revision 2 (approved). Supersedes design revision 1 (git history).
   0.1; `n_fail` of `coverage` counts failing cells (13 cells: 4 + 4 + 5).
   (4) Checks are pure and return JSON-serializable results;
   `require_acceptance` raises `GenerationError` naming each failed check.
+- **D02.6 Writer and seeding details (T02.7, agent, within R02.7-R02.10).**
+  (1) **Two seed streams, not four.** The design listed "orientations,
+  near_kink, sd, yaw". Spin and yaw are drawn inside each orientation
+  sampler, so separate streams would only add coupling. Implemented:
+  `SeedSequence(seed).spawn(2)` -> `orientations`, `sd`; entropy and spawn
+  keys recorded, which reproduces each stream. (2) **Safe publish.**
+  Measured: `os.rename` onto an existing *empty* directory silently
+  replaces it on Linux. The target is therefore first claimed with
+  `os.mkdir` (fails if it exists), then renamed; an existing target, even
+  empty, raises `GenerationError` and nothing is replaced. (3) **CSV.**
+  Floats `%.17g` (measured: bitwise float64 round trip on 1e5 values),
+  `orientation_id` integer, `component` and `sd_part` as names. CSV above
+  1e4 rows raises `ConfigError` (R02.7). (4) **Provenance.** Exclusion list
+  recorded by count and sha256 of its float64 bytes; shape recorded with its
+  hull vertices and constants; timestamp UTC with microseconds;
+  `git_commit` and `git_dirty` are `null` if git is unavailable.
+  (5) `.gitignore` also ignores `.tmp_dataset_*/` build folders.
 
 ## Requirements traceability
 
@@ -255,7 +272,8 @@ ss = numpy SeedSequence(seed)
 children = ss.spawn(4) -> streams: orientations, near_kink, sd, yaw
 ```
 
-The spawn keys are recorded in the provenance.
+The spawn keys are recorded in the provenance. Implemented with two streams
+(`orientations`, `sd`), see D02.6.
 
 ### Provenance (R02.10)
 

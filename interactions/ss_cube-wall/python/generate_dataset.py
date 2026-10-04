@@ -10,13 +10,22 @@ Implemented so far:
 - T02.5, sd sampler and row assembly with recomputed labels (R02.1, R02.2,
   R02.4, R02.6; D02.4).
 - T02.6, coverage table and acceptance checks (R02.5, R02.12).
-Later tasks (T02.7-T02.8) add the writer and CLI.
+- T02.7, writer, versioning, provenance, seeding (R02.7-R02.10; D02.6).
+Later task T02.8 adds the CLI and summary.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
 
+import dataclasses
+import datetime
+import hashlib
+import json
 import math
 import numbers
+import os
+import platform
+import re
+import subprocess
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -902,3 +911,243 @@ def require_acceptance(results):
               for name, r in results.items() if not r["passed"]]
     if failed:
         raise GenerationError("acceptance checks failed: " + "; ".join(failed))
+
+
+# ---------------------------------------------------------------------------
+# T02.7 Writer, versioning, provenance, seeding (R02.7-R02.10; D02.6)
+# ---------------------------------------------------------------------------
+
+SPEC_REVISIONS = {"01": "rev 3", "02": "rev 2"}
+GENERATOR_NAME = "generate_dataset.py"
+# Random streams derived from the master seed (D02.6), in spawn order.
+SEED_STREAMS = ("orientations", "sd")
+DATASET_PREFIX = "dataset_"
+_DATASET_RE = re.compile(r"^dataset_(\d{3,})$")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _cube_points():
+    import cube_wall
+    return cube_wall.CUBE_VERTICES
+
+
+def generate_rows(cfg, shape):
+    """Sample and assemble all rows for `cfg` (R02.9).
+
+    One master seed; independent streams are spawned with numpy SeedSequence
+    (SEED_STREAMS order). Returns (rows, seed_info) where seed_info records
+    the master seed and each stream's entropy and spawn key, so every stream
+    can be reconstructed.
+    """
+    validate_config(cfg)
+    ss = np.random.SeedSequence(cfg.seed)
+    children = ss.spawn(len(SEED_STREAMS))
+    rngs = {name: np.random.default_rng(child) for name, child in zip(SEED_STREAMS, children)}
+    quats, comp = sample_orientations(cfg, shape, rngs["orientations"])
+    h = (u_from_quats(quats) @ shape.vertices.T).max(axis=1)
+    sd, part = sample_sd(cfg, shape, h, rngs["sd"])
+    rows = build_rows(cfg, shape, quats, comp, sd, part)
+    seed_info = {
+        "master_seed": int(cfg.seed),
+        "streams": {name: {"entropy": int(child.entropy), "spawn_key": [int(k) for k in child.spawn_key]}
+                    for name, child in zip(SEED_STREAMS, children)},
+    }
+    return rows, seed_info
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _git_state():
+    """(commit, dirty) of the repository holding this script; (None, None) if unknown."""
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=_HERE, capture_output=True,
+                                text=True, timeout=10)
+        if commit.returncode != 0:
+            return None, None
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=_HERE, capture_output=True,
+                                text=True, timeout=10)
+        dirty = bool(status.stdout.strip()) if status.returncode == 0 else None
+        return commit.stdout.strip(), dirty
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+
+
+def _config_record(cfg):
+    """All GenConfig fields, JSON-serializable; the exclusion list by count and sha256."""
+    rec = {}
+    for f in dataclasses.fields(cfg):
+        v = getattr(cfg, f.name)
+        if f.name == "exclude_quats":
+            if v is None:
+                rec[f.name] = None
+            else:
+                a = np.ascontiguousarray(np.asarray(v, dtype=np.float64))
+                rec[f.name] = {"count": int(a.shape[0]), "sha256": hashlib.sha256(a.tobytes()).hexdigest()}
+        elif isinstance(v, dict):
+            rec[f.name] = {k: float(x) for k, x in v.items()}
+        elif isinstance(v, (tuple, list)):
+            rec[f.name] = [float(x) for x in v]
+        elif isinstance(v, (bool, np.bool_)):
+            rec[f.name] = bool(v)
+        elif _is_int(v):
+            rec[f.name] = int(v)
+        else:
+            rec[f.name] = float(v)
+    return rec
+
+
+def _shape_record(shape, source):
+    """Shape used for the labels: source name, hull vertices and constants."""
+    return {
+        "source": source,
+        "points": np.asarray(shape.vertices).tolist(),
+        "n_hull_vertices": int(len(shape.vertices)),
+        "n_facets": int(len(shape.facet_normals)),
+        "n_edges": int(len(shape.edge_facets)),
+        "r_circ": float(shape.r_circ),
+        "h_min": float(shape.h_min),
+        "z_prefilter": float(shape.r_circ + SD_ACCURACY_MAX),
+    }
+
+
+def _next_index(root):
+    """1 + largest existing dataset_XXX number under root (0 if none)."""
+    if not os.path.isdir(root):
+        return 1
+    nums = [int(m.group(1)) for m in (_DATASET_RE.match(n) for n in os.listdir(root)) if m]
+    return (max(nums) if nums else 0) + 1
+
+
+def _write_csv(rows, path):
+    """CSV with header, comma delimiter, floats with 17 significant digits (R02.7).
+
+    `component` and `sd_part` are written as their names (design: Data and units).
+    """
+    inv_comp = {v: k for k, v in COMPONENT_CODES.items()}
+    inv_part = {v: k for k, v in SD_PART_CODES.items()}
+    n = len(rows[ROW_COLUMNS[0]])
+    cols = []
+    for name in ROW_COLUMNS:
+        a = rows[name]
+        if name == "component":
+            cols.append([inv_comp[int(v)] for v in a])
+        elif name == "sd_part":
+            cols.append([inv_part[int(v)] for v in a])
+        elif name == "orientation_id":
+            cols.append([str(int(v)) for v in a])
+        else:
+            cols.append(["%.17g" % v for v in a])
+    with open(path, "w", newline="") as f:
+        f.write(",".join(ROW_COLUMNS) + "\n")
+        for i in range(n):
+            f.write(",".join(c[i] for c in cols) + "\n")
+
+
+def _publish(tmp, final):
+    """Rename tmp to final without ever replacing an existing path (D02.6).
+
+    os.rename silently replaces an existing EMPTY directory on POSIX, so the
+    target is first claimed with os.mkdir (fails if it exists), then the
+    claim is removed and the rename done; a race in that gap makes rename
+    fail on a non-empty target or, at worst, the second writer fails at mkdir.
+    """
+    try:
+        os.mkdir(final)
+    except FileExistsError:
+        raise GenerationError(f"target {final} already exists; refusing to overwrite. "
+                              f"Data left in {tmp}") from None
+    os.rmdir(final)
+    try:
+        os.rename(tmp, final)
+    except OSError as e:
+        raise GenerationError(f"could not publish {tmp} as {final}: {e}") from None
+
+
+def write_dataset(rows, cfg, shape, out_root, seed_info, csv=False, shape_source="cube_wall.CUBE_VERTICES"):
+    """Check rows, write a new dataset folder, return its path (R02.7, R02.8, R02.10).
+
+    Steps: acceptance checks (abort before writing on failure, R02.11); build
+    in out_root/.tmp_dataset_XXX_<pid>; write data.npz (uncompressed,
+    byte-reproducible), optional data.csv, then provenance.json last;
+    publish atomically as dataset_XXX. Existing datasets are never
+    overwritten. On a write failure the temp folder is left for inspection
+    and no complete-looking dataset folder exists.
+    """
+    validate_config(cfg)
+    if csv and cfg.n_rows > SMOKE_MAX_ROWS:
+        raise ConfigError("csv", f"CSV export is limited to {SMOKE_MAX_ROWS} rows (R02.7), got {cfg.n_rows}")
+    _check_rows(rows)
+    acceptance = acceptance_checks(rows, cfg, shape)
+    require_acceptance(acceptance)
+    coverage = coverage_table(rows)
+
+    os.makedirs(out_root, exist_ok=True)
+    idx = _next_index(out_root)
+    name = f"{DATASET_PREFIX}{idx:03d}"
+    final = os.path.join(out_root, name)
+    tmp = os.path.join(out_root, f".tmp_{name}_{os.getpid()}")
+    try:
+        os.mkdir(tmp)
+    except FileExistsError:
+        raise GenerationError(f"temporary folder {tmp} already exists; remove it and retry") from None
+
+    try:
+        npz_path = os.path.join(tmp, "data.npz")
+        np.savez(npz_path, **{k: rows[k] for k in ROW_COLUMNS})
+        sha = {"data.npz": _sha256(npz_path)}
+        if csv:
+            csv_path = os.path.join(tmp, "data.csv")
+            _write_csv(rows, csv_path)
+            sha["data.csv"] = _sha256(csv_path)
+        commit, dirty = _git_state()
+        import scipy
+        provenance = {
+            "spec": dict(SPEC_REVISIONS),
+            "generator": GENERATOR_NAME,
+            "git_commit": commit,
+            "git_dirty": dirty,
+            "versions": {"python": platform.python_version(), "numpy": np.__version__,
+                         "scipy": scipy.__version__},
+            "config": _config_record(cfg),
+            "seed": seed_info,
+            "shape": _shape_record(shape, shape_source),
+            "n_rows": int(cfg.n_rows),
+            "columns": list(ROW_COLUMNS),
+            "codes": {"component": dict(COMPONENT_CODES), "sd_part": dict(SD_PART_CODES)},
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "sha256": sha,
+            "coverage": coverage,
+            "acceptance": acceptance,
+        }
+        with open(os.path.join(tmp, "provenance.json"), "w") as f:
+            json.dump(provenance, f, indent=2, sort_keys=False)
+            f.write("\n")
+    except GenerationError:
+        raise
+    except Exception as e:
+        raise GenerationError(f"writing dataset failed ({type(e).__name__}: {e}); "
+                              f"partial data left in {tmp}") from None
+
+    _publish(tmp, final)
+    return final
+
+
+def generate(cfg, out_root, csv=False, points=None):
+    """Whole pipeline: validate, sample, assemble, check, write. Returns the dataset path.
+
+    `points` is the body-frame point set (default: the canonical cube).
+    Validation errors are raised before anything is created (R02.11).
+    """
+    validate_config(cfg)
+    if csv and cfg.n_rows > SMOKE_MAX_ROWS:
+        raise ConfigError("csv", f"CSV export is limited to {SMOKE_MAX_ROWS} rows (R02.7), got {cfg.n_rows}")
+    source = "cube_wall.CUBE_VERTICES" if points is None else "user point set"
+    shape = shape_from_points(_cube_points() if points is None else points)
+    rows, seed_info = generate_rows(cfg, shape)
+    return write_dataset(rows, cfg, shape, out_root, seed_info, csv=csv, shape_source=source)

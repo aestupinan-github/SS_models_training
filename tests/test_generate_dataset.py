@@ -9,11 +9,16 @@ T02.4: orientation sampler, near_kink by bisection, and exclusion by u
 T02.5: sd sampler and row assembly with recomputed labels
        (R02.1, R02.2, R02.4, R02.6).
 T02.6: coverage table and acceptance checks (R02.5, R02.12).
+T02.7: writer, versioning, provenance, seeding (R02.7, R02.8, R02.9, R02.10).
 """
 
+import csv
 import dataclasses
+import hashlib
 import json
 import math
+import shutil
+import subprocess
 import os
 import sys
 import tempfile
@@ -28,6 +33,10 @@ from scipy.spatial.transform import Rotation as R  # noqa: E402
 from generate_dataset import (  # noqa: E402
     ConfigError,
     ACCEPTANCE_CHECKS,
+    SEED_STREAMS,
+    generate,
+    generate_rows,
+    write_dataset,
     COMPONENT_CODES,
     COVERAGE_DELTA_RANGE,
     COVERAGE_SD_RANGE,
@@ -1150,6 +1159,264 @@ class TestAcceptanceChecks(unittest.TestCase):
         r["sd"] = r["sd"][:-1]
         with self.assertRaises(ValueError):
             acceptance_checks(r, self.c, self.s)
+
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _sha(path):
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _small(**kw):
+    """Small valid config for writer tests (500 rows)."""
+    base = dict(n_orient=125, k_per_orient=4, seed=SEED)
+    base.update(kw)
+    return cfg(**base)
+
+
+class _TmpRoot(unittest.TestCase):
+    def setUp(self):
+        self._d = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self._d.name, "data")
+
+    def tearDown(self):
+        self._d.cleanup()
+
+    def datasets(self):
+        if not os.path.isdir(self.root):
+            return []
+        return sorted(n for n in os.listdir(self.root) if n.startswith("dataset_"))
+
+
+class TestSeeding(unittest.TestCase):
+    """R02.9: one master seed, derived streams, bitwise reproducible arrays."""
+
+    def test_stream_names(self):
+        self.assertEqual(SEED_STREAMS, ("orientations", "sd"))
+
+    def test_same_seed_identical_arrays(self):
+        c = _small()
+        r1, info1 = generate_rows(c, _cube_shape())
+        r2, info2 = generate_rows(c, _cube_shape())
+        for k in ROW_COLUMNS:
+            self.assertTrue(np.array_equal(r1[k], r2[k]), msg=k)
+        self.assertEqual(info1, info2)
+
+    def test_different_seed_different_arrays(self):
+        r1, _ = generate_rows(_small(seed=1), _cube_shape())
+        r2, _ = generate_rows(_small(seed=2), _cube_shape())
+        self.assertFalse(np.array_equal(r1["qw"], r2["qw"]))
+
+    def test_seed_info_recorded(self):
+        _, info = generate_rows(_small(seed=7), _cube_shape())
+        self.assertEqual(info["master_seed"], 7)
+        self.assertEqual(set(info["streams"]), set(SEED_STREAMS))
+        keys = [tuple(v["spawn_key"]) for v in info["streams"].values()]
+        self.assertEqual(len(set(keys)), len(keys))
+        # the recorded entropy and spawn key reproduce the stream
+        v = info["streams"]["sd"]
+        a = np.random.default_rng(np.random.SeedSequence(v["entropy"], spawn_key=v["spawn_key"])).random(3)
+        b = np.random.default_rng(np.random.SeedSequence(7).spawn(len(SEED_STREAMS))[SEED_STREAMS.index("sd")]).random(3)
+        self.assertTrue(np.array_equal(a, b))
+
+    def test_rows_pass_acceptance(self):
+        c = _small()
+        rows, _ = generate_rows(c, _cube_shape())
+        self.assertIsNone(require_acceptance(acceptance_checks(rows, c, _cube_shape())))
+
+
+class TestWriter(_TmpRoot):
+    """R02.7, R02.8, R02.10: files, versioned folders, provenance."""
+
+    def test_first_dataset_folder_and_files(self):
+        path = generate(_small(), self.root)
+        self.assertEqual(os.path.basename(path), "dataset_001")
+        self.assertEqual(sorted(os.listdir(path)), ["data.npz", "provenance.json"])
+        self.assertEqual(self.datasets(), ["dataset_001"])
+        self.assertEqual([n for n in os.listdir(self.root) if n.startswith(".tmp")], [])
+
+    def test_npz_content(self):
+        c = _small()
+        path = generate(c, self.root)
+        rows, _ = generate_rows(c, _cube_shape())
+        with np.load(os.path.join(path, "data.npz")) as z:
+            self.assertEqual(tuple(z.files), ROW_COLUMNS)
+            for k in ROW_COLUMNS:
+                self.assertTrue(np.array_equal(z[k], rows[k]), msg=k)
+                self.assertEqual(z[k].dtype, rows[k].dtype, msg=k)
+
+    def test_never_overwrites_and_increments(self):
+        p1 = generate(_small(), self.root)
+        before = _sha(os.path.join(p1, "data.npz"))
+        p2 = generate(_small(seed=1), self.root)
+        p3 = generate(_small(seed=2), self.root)
+        self.assertEqual([os.path.basename(p) for p in (p1, p2, p3)], ["dataset_001", "dataset_002", "dataset_003"])
+        self.assertEqual(_sha(os.path.join(p1, "data.npz")), before)
+
+    def test_counter_follows_existing_max(self):
+        os.makedirs(os.path.join(self.root, "dataset_007"))
+        open(os.path.join(self.root, "dataset_007", "keep.txt"), "w").close()
+        os.makedirs(os.path.join(self.root, "notes"))
+        p = generate(_small(), self.root)
+        self.assertEqual(os.path.basename(p), "dataset_008")
+        self.assertEqual(os.listdir(os.path.join(self.root, "dataset_007")), ["keep.txt"])
+
+    def test_existing_target_is_never_replaced(self):
+        # D02.6: an existing (even empty) target folder must not be replaced
+        import generate_dataset as gd
+        os.makedirs(os.path.join(self.root, "dataset_001"))
+        marker = os.path.join(self.root, "dataset_001", "precious.txt")
+        open(marker, "w").close()
+        orig = gd._next_index
+        gd._next_index = lambda root: 1
+        try:
+            with self.assertRaises(GenerationError):
+                generate(_small(), self.root)
+        finally:
+            gd._next_index = orig
+        self.assertEqual(os.listdir(os.path.join(self.root, "dataset_001")), ["precious.txt"])
+
+    def test_existing_empty_target_is_never_replaced(self):
+        import generate_dataset as gd
+        os.makedirs(os.path.join(self.root, "dataset_001"))
+        orig = gd._next_index
+        gd._next_index = lambda root: 1
+        try:
+            with self.assertRaises(GenerationError):
+                generate(_small(), self.root)
+        finally:
+            gd._next_index = orig
+        self.assertEqual(os.listdir(os.path.join(self.root, "dataset_001")), [])
+
+    def test_same_seed_identical_file_checksum(self):
+        a = generate(_small(), self.root)
+        b = generate(_small(), self.root)
+        self.assertEqual(_sha(os.path.join(a, "data.npz")), _sha(os.path.join(b, "data.npz")))
+
+    def test_provenance_fields(self):
+        c = _small(exclude_quats=np.array([[1.0, 0, 0, 0]]), exclude_angle_deg=2.0)
+        path = generate(c, self.root, csv=True)
+        with open(os.path.join(path, "provenance.json")) as f:
+            p = json.load(f)
+        for key in ("spec", "generator", "git_commit", "git_dirty", "versions", "config", "seed",
+                    "shape", "n_rows", "columns", "codes", "timestamp_utc", "sha256", "coverage", "acceptance"):
+            self.assertIn(key, p)
+        self.assertEqual(p["spec"], {"01": "rev 3", "02": "rev 2"})
+        self.assertEqual(p["generator"], "generate_dataset.py")
+        self.assertEqual(set(p["versions"]), {"python", "numpy", "scipy"})
+        self.assertEqual(p["versions"]["numpy"], np.__version__)
+        self.assertEqual(p["seed"]["master_seed"], SEED)
+        self.assertEqual(set(p["seed"]["streams"]), set(SEED_STREAMS))
+        self.assertEqual(p["n_rows"], 500)
+        self.assertEqual(p["columns"], list(ROW_COLUMNS))
+        self.assertEqual(p["codes"], {"component": COMPONENT_CODES, "sd_part": SD_PART_CODES})
+        self.assertRegex(p["timestamp_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$")
+        self.assertEqual(p["sha256"]["data.npz"], _sha(os.path.join(path, "data.npz")))
+        self.assertEqual(p["sha256"]["data.csv"], _sha(os.path.join(path, "data.csv")))
+        self.assertTrue(all(r["passed"] for r in p["acceptance"].values()))
+        self.assertEqual(p["coverage"]["n_rows"], 500)
+        # config: every GenConfig field; exclusion list by checksum and count
+        self.assertEqual(set(p["config"]), {f.name for f in dataclasses.fields(GenConfig)})
+        ex = p["config"]["exclude_quats"]
+        self.assertEqual(ex["count"], 1)
+        self.assertEqual(ex["sha256"], hashlib.sha256(np.ascontiguousarray([[1.0, 0, 0, 0]], dtype=np.float64).tobytes()).hexdigest())
+        self.assertEqual(p["config"]["exclude_angle_deg"], 2.0)
+        self.assertEqual(p["config"]["sd_fractions"], DEFAULT_SD_FRACTIONS)
+        # shape: points and constants
+        self.assertEqual(p["shape"]["n_hull_vertices"], 8)
+        self.assertEqual(p["shape"]["r_circ"], cw.R_CIRCUMSCRIBED)
+        self.assertEqual(p["shape"]["h_min"], cw.H_MIN)
+        self.assertEqual(np.array(p["shape"]["points"]).shape, (8, 3))
+
+    def test_git_fields(self):
+        path = generate(_small(), self.root)
+        with open(os.path.join(path, "provenance.json")) as f:
+            p = json.load(f)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True)
+        if head.returncode == 0:
+            self.assertEqual(p["git_commit"], head.stdout.strip())
+            self.assertIsInstance(p["git_dirty"], bool)
+
+    def test_csv_round_trip(self):
+        c = _small()
+        path = generate(c, self.root, csv=True)
+        with np.load(os.path.join(path, "data.npz")) as z:
+            arrays = {k: z[k] for k in z.files}
+        with open(os.path.join(path, "data.csv"), newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            body = list(reader)
+        self.assertEqual(header, list(ROW_COLUMNS))
+        self.assertEqual(len(body), 500)
+        inv_comp = {v: k for k, v in COMPONENT_CODES.items()}
+        inv_part = {v: k for k, v in SD_PART_CODES.items()}
+        for j, name in enumerate(ROW_COLUMNS):
+            col = [row[j] for row in body]
+            if name == "component":
+                self.assertEqual(col, [inv_comp[int(v)] for v in arrays[name]])
+            elif name == "sd_part":
+                self.assertEqual(col, [inv_part[int(v)] for v in arrays[name]])
+            elif name == "orientation_id":
+                self.assertEqual([int(v) for v in col], arrays[name].tolist())
+            else:
+                # 17 significant digits: exact float64 round trip
+                self.assertTrue(np.array_equal(np.array([float(v) for v in col]), arrays[name]), msg=name)
+
+    def test_csv_limited_to_smoke_size(self):
+        c = cfg(n_orient=1300, k_per_orient=8, allow_full_scale=True)
+        with self.assertRaises(ConfigError):
+            generate(c, self.root, csv=True)
+        self.assertEqual(self.datasets(), [])
+
+    def test_invalid_config_writes_nothing(self):
+        with self.assertRaises(ConfigError):
+            generate(_small(n_orient=0), self.root)
+        self.assertFalse(os.path.exists(self.root) and os.listdir(self.root))
+
+    def test_failed_acceptance_writes_nothing(self):
+        c = _small()
+        rows, info = generate_rows(c, _cube_shape())
+        rows["sd"][0] += 1e-9
+        with self.assertRaises(GenerationError):
+            write_dataset(rows, c, _cube_shape(), self.root, seed_info=info)
+        self.assertEqual(self.datasets(), [])
+
+    def test_write_failure_leaves_no_complete_folder(self):
+        import generate_dataset as gd
+        orig = gd.np.savez
+
+        def boom(*a, **k):
+            raise OSError("disk full (simulated)")
+        gd.np.savez = boom
+        try:
+            with self.assertRaises(GenerationError) as ctx:
+                generate(_small(), self.root)
+        finally:
+            gd.np.savez = orig
+        self.assertEqual(self.datasets(), [])
+        tmp = [n for n in os.listdir(self.root) if n.startswith(".tmp_dataset_")]
+        self.assertEqual(len(tmp), 1)
+        self.assertIn(tmp[0], str(ctx.exception))      # temp folder named for inspection
+
+    def test_provenance_written_last(self):
+        # a folder without provenance.json is never published
+        path = generate(_small(), self.root)
+        self.assertTrue(os.path.isfile(os.path.join(path, "provenance.json")))
+
+
+class TestGitignore(unittest.TestCase):
+    """D02.2: generated dataset folders are ignored by git."""
+
+    def test_dataset_folders_ignored(self):
+        if shutil.which("git") is None:
+            self.skipTest("git not available")
+        for rel in ("interactions/ss_cube-wall/data/dataset_001/data.npz",
+                    "interactions/ss_cube-wall/data/dataset_123/provenance.json",
+                    "interactions/ss_cube-wall/data/.tmp_dataset_004_99/data.npz"):
+            r = subprocess.run(["git", "check-ignore", "-q", rel], cwd=REPO_ROOT)
+            self.assertEqual(r.returncode, 0, msg=rel)
 
 
 if __name__ == "__main__":

@@ -79,13 +79,17 @@
   five parts with gap-safety fallback, `build_rows` with recomputed labels;
   D02.4 rounding/stratification decision). 165 tests OK.
   T02.6 done (`coverage_table`, `acceptance_checks` with 9 checks,
-  `require_acceptance`; D02.5). 191 tests OK.
-  **Next: T02.7** (writer: new `dataset_XXX` folder via temp folder and
-  atomic rename, never overwrite; `data.npz` uncompressed and optional CSV
-  with 17 significant digits; `provenance.json` with all R02.10 fields;
-  SeedSequence streams; `.gitignore` line `interactions/*/data/dataset_*/`,
-  D02.2). T02.7-T02.8 not started; each waits for the user's go. No dataset
-  file exists yet.
+  `require_acceptance`; D02.5). T02.7 done (`generate_rows` with seed
+  streams, `write_dataset`, `generate`: versioned `dataset_XXX` folders,
+  never overwritten, `data.npz` + optional `data.csv`, `provenance.json`;
+  D02.6; `.gitignore` covers dataset folders). 212 tests OK.
+  **Next: T02.8** (CLI `python generate_dataset.py --n-orient N --k K
+  --seed S [--csv] [--allow-full-scale] [--exclude FILE --exclude-angle
+  DEG]`, printed summary, then ONE smoke dataset of at most 1e4 rows,
+  `.npz` + CSV, in `interactions/ss_cube-wall/data/`, listed in the
+  interaction README, reported as a smoke test). T02.8 not started; waits
+  for the user's go. No dataset has been written to `data/` yet (tests use
+  temporary folders only).
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -106,7 +110,11 @@
   orientation, else seeded random parts (defaults need K >= 50). D02.5
   (T02.6) extra `h_consistent` check; ranges checked per sd part; decade
   boundaries lower-inclusive, last decade includes 0.1; coverage n_fail
-  counts failing cells.
+  counts failing cells. D02.6 (T02.7) two seed streams (`orientations`,
+  `sd`) instead of the four listed in the design; safe publish via
+  `os.mkdir` claim because `os.rename` silently replaces an empty
+  directory (measured); CSV `%.17g` with names for codes; exclusion list in
+  provenance by count and sha256.
 
 - Single-output model (signed distance only): simplifies the contract.
   Contact point/normal are deferred (user priority: overlap accuracy).
@@ -170,6 +178,7 @@
 
 ## Recent changes
 
+- 2026-10-03: T02.7 implemented and committed: writer, versioned dataset folders (never overwritten), npz + CSV (17 digits, exact round trip), provenance with all R02.10 fields, SeedSequence streams, `.gitignore` for dataset folders. D02.6 recorded. 212 tests OK.
 - 2026-10-03: T02.6 implemented and committed (code and tests `1532a4e`; design/tasks `1599b94`; this MEMORY update in the next commit): coverage table and 9 acceptance checks (each fails on a corrupted row; all pass on smoke data, worst label error 6.7e-16). D02.4 and D02.5 added to "Decisions and rationale". 191 tests OK.
 - 2026-10-03: T02.5 implemented and committed: orientation mixture, sd sampler (5 parts, gap-safety fallback), row assembly with recomputed labels (0.0 error vs spec 01 reference on 10000 rows). D02.4 recorded. 165 tests OK.
 

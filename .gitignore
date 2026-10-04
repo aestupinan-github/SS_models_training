@@ -2,6 +2,9 @@
 interactions/*/data/*.csv
 interactions/*/data/*.h5
 interactions/*/data/*.npz
+# Generated dataset folders and their temporary build folders (spec 02, D02.2)
+interactions/*/data/dataset_*/
+interactions/*/data/.tmp_dataset_*/
 
 # Model artifacts
 interactions/*/output/*.pt
