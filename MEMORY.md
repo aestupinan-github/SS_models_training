@@ -78,9 +78,14 @@
   T02.5 done (`sample_orientations` mixture, `sample_sd`
   five parts with gap-safety fallback, `build_rows` with recomputed labels;
   D02.4 rounding/stratification decision). 165 tests OK.
-  **Next: T02.6** (coverage table per decade of |sd| and Delta, acceptance
-  checks per R02.12 that fail on a corrupted row). T02.6-T02.8 not started;
-  each waits for the user's go. No dataset file exists yet (writer is T02.7).
+  T02.6 done (`coverage_table`, `acceptance_checks` with 9 checks,
+  `require_acceptance`; D02.5). 191 tests OK.
+  **Next: T02.7** (writer: new `dataset_XXX` folder via temp folder and
+  atomic rename, never overwrite; `data.npz` uncompressed and optional CSV
+  with 17 significant digits; `provenance.json` with all R02.10 fields;
+  SeedSequence streams; `.gitignore` line `interactions/*/data/dataset_*/`,
+  D02.2). T02.7-T02.8 not started; each waits for the user's go. No dataset
+  file exists yet.
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -95,6 +100,13 @@
   `interactions/*/data/dataset_*/`; D02.3 held-out exclusion by body-frame
   direction `u` (superset of per-orientation exclusion, measured), symmetric
   images listed explicitly by spec 04.
+- Agent decisions made during implementation, within the approved design,
+  recorded in spec 02 `design.md`: D02.4 (T02.5) half-up rounding;
+  stratified sd parts only if every positive part gets a row per
+  orientation, else seeded random parts (defaults need K >= 50). D02.5
+  (T02.6) extra `h_consistent` check; ranges checked per sd part; decade
+  boundaries lower-inclusive, last decade includes 0.1; coverage n_fail
+  counts failing cells.
 
 - Single-output model (signed distance only): simplifies the contract.
   Contact point/normal are deferred (user priority: overlap accuracy).
@@ -158,6 +170,7 @@
 
 ## Recent changes
 
+- 2026-10-03: T02.6 implemented and committed (code and tests `1532a4e`; design/tasks `1599b94`; this MEMORY update in the next commit): coverage table and 9 acceptance checks (each fails on a corrupted row; all pass on smoke data, worst label error 6.7e-16). D02.4 and D02.5 added to "Decisions and rationale". 191 tests OK.
 - 2026-10-03: T02.5 implemented and committed: orientation mixture, sd sampler (5 parts, gap-safety fallback), row assembly with recomputed labels (0.0 error vs spec 01 reference on 10000 rows). D02.4 recorded. 165 tests OK.
 
 - 2026-10-03: T02.4 implemented and committed: `sample_near_kink` (worst relative Delta error 6.5e-10 on the cube incl. quaternion chain; 1e5 rows 0.74 s), `exclusion_mask`, exclusion in all samplers (raises instead of looping when impossible). Two test expectations corrected and recorded in tasks.md and design.md (edge-like definition; tetrahedron tolerance). 135 tests OK.
