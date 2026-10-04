@@ -47,9 +47,14 @@
 - `inspired_codes/` holds prior reference scripts. Inspiration only, partly
   unfinished, not imported at runtime, to be reviewed later.
 - Code that exists: `interactions/ss_cube-wall/python/cube_wall.py`
-  (reference solution: `canonicalize_quaternion`, `z_touch`,
-  `compute_signed_distance`), `tests/test_overlap_contract.py`,
-  `tests/test_structure.py`, `check_structure.py`.
+  (spec 01 reference solution and contract helpers),
+  `interactions/ss_cube-wall/python/smoke_contract.py` (contract smoke test),
+  `interactions/ss_cube-wall/python/generate_dataset.py` (spec 02 dataset
+  generator with CLI), `tests/test_overlap_contract.py`,
+  `tests/test_generate_dataset.py`, `tests/test_structure.py`,
+  `check_structure.py`.
+- Datasets: `interactions/ss_cube-wall/data/dataset_001` (smoke, 10000 rows,
+  seed 20261003, commit `811e60d`; not committed to git, reproducible).
 
 ## Unverified prior context
 
@@ -82,14 +87,19 @@
   `require_acceptance`; D02.5). T02.7 done (`generate_rows` with seed
   streams, `write_dataset`, `generate`: versioned `dataset_XXX` folders,
   never overwritten, `data.npz` + optional `data.csv`, `provenance.json`;
-  D02.6; `.gitignore` covers dataset folders). 212 tests OK.
-  **Next: T02.8** (CLI `python generate_dataset.py --n-orient N --k K
-  --seed S [--csv] [--allow-full-scale] [--exclude FILE --exclude-angle
-  DEG]`, printed summary, then ONE smoke dataset of at most 1e4 rows,
-  `.npz` + CSV, in `interactions/ss_cube-wall/data/`, listed in the
-  interaction README, reported as a smoke test). T02.8 not started; waits
-  for the user's go. No dataset has been written to `data/` yet (tests use
-  temporary folders only).
+  D02.6; `.gitignore` covers dataset folders). T02.8 done (CLI `main`,
+  `format_summary`; 224 tests OK). **Generator complete.**
+  **First smoke dataset written:** `interactions/ss_cube-wall/data/dataset_001`,
+  10000 rows (1250 x 8), seed 20261003, `.npz` + CSV + provenance, generated
+  at clean commit `811e60d`; all 9 acceptance checks pass (worst label error
+  6.7e-16, smallest coverage cell 584 rows); independent check vs
+  `cube_wall.compute_signed_distance`: error 0.0. It is a software check,
+  not a training dataset and not a scientific result.
+  **Remaining in spec 02:** user approval of spec 02 as complete; T02.9
+  full-scale generation only after the spec 03 learning-curve study and
+  explicit user approval.
+  **Next (needs user decision):** revise spec 03 (training) before any
+  training work. Pending items listed below.
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -173,10 +183,17 @@
 
 - Python env: `../env_folder/bin/python` (next to the project folder).
 - LibTorch: `../libtorch/` (next to the project folder).
-- Unit tests: `../env_folder/bin/python -m unittest discover tests` from the
-  project root.
+- Unit tests: `../env_folder/bin/python -B -m unittest discover tests` from
+  the project root (224 tests).
+- Generate a dataset: `../env_folder/bin/python -B
+  interactions/ss_cube-wall/python/generate_dataset.py --n-orient N --k K
+  --seed S [--csv] [--allow-full-scale] [--exclude FILE --exclude-angle DEG]
+  [--out DIR]`. More than 1e4 rows needs `--allow-full-scale` and user
+  approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: T02.8 implemented: CLI and summary (code commit `811e60d`), then the first smoke dataset `data/dataset_001` (10000 rows, all checks pass) generated at that clean commit and listed in the interaction README. Generator complete. 224 tests OK.
 
 - 2026-10-03: T02.7 implemented and committed: writer, versioned dataset folders (never overwritten), npz + CSV (17 digits, exact round trip), provenance with all R02.10 fields, SeedSequence streams, `.gitignore` for dataset folders. D02.6 recorded. 212 tests OK.
 - 2026-10-03: T02.6 implemented and committed (code and tests `1532a4e`; design/tasks `1599b94`; this MEMORY update in the next commit): coverage table and 9 acceptance checks (each fails on a corrupted row; all pass on smoke data, worst label error 6.7e-16). D02.4 and D02.5 added to "Decisions and rationale". 191 tests OK.

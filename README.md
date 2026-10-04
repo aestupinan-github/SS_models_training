@@ -24,7 +24,7 @@ SS_models_training/
 
 | Interaction | Status |
 |---|---|
-| `ss_cube-wall` | Phase 1: spec 01 (contract) rev 3 implemented and approved |
+| `ss_cube-wall` | Phase 1: spec 01 (contract) rev 3 approved; spec 02 generator implemented, smoke dataset written |
 
 ## Getting started
 
