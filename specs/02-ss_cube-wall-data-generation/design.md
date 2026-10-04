@@ -41,6 +41,17 @@ revision 2 (approved). Supersedes design revision 1 (git history).
   orientation components. With the default fractions, stratified needs
   `K >= 50`. Recorded here because the user asked that delegated choices be
   recorded.
+- **D02.5 Acceptance-check details (T02.6, agent, within R02.12).**
+  (1) An extra check `h_consistent` (`|h - h_ref| <= 1e-12`) is added next to
+  `label`: if a row's `h` and `sd` were wrong by the same amount,
+  `position_z - h` would still equal `sd`, so `h_ref` is always recomputed
+  from the stored quaternion. (2) "Inside the R02.2 ranges" is checked per
+  `sd` part (e.g. a gap row in the near-contact band fails), plus the global
+  bound `sd >= -0.1`; exact-contact rows must be exactly 0. (3) Coverage
+  decades: lower bound inclusive, upper exclusive, the last decade includes
+  0.1; `n_fail` of `coverage` counts failing cells (13 cells: 4 + 4 + 5).
+  (4) Checks are pure and return JSON-serializable results;
+  `require_acceptance` raises `GenerationError` naming each failed check.
 
 ## Requirements traceability
 
@@ -218,7 +229,7 @@ sd     = position_z - h_ref        # stored label, recomputed (R02.1)
 Vectorized over all rows: label tolerance `1e-12`, ranges, finiteness, unit
 norm within `1e-12`, canonical form, coverage `>= m_min` per decade cell,
 exclusion distance. Each check records pass/fail, number of failing rows and
-the worst value. Any failure aborts the write (R02.11).
+the worst value. Any failure aborts the write (R02.11). Details: D02.5.
 
 ### Writer and versioning (R02.7, R02.8)
 
