@@ -98,6 +98,14 @@
   **Remaining in spec 02:** user approval of spec 02 as complete; T02.9
   full-scale generation only after the spec 03 learning-curve study and
   explicit user approval.
+  **T02.9 BLOCKED (checked 2026-10-04, not executed, nothing generated).**
+  Unblock needs: (1) spec 03 revised and approved incl. the learning-curve
+  study; (2) the study run (own approval) and reviewed; (3) user decisions
+  `N_orient`, `K` (D02.4: `K >= 50` for stratified parts), seed, `M_min`
+  (R02.5, OPEN); (4) small approved prerequisite: add `--m-min` to the CLI
+  (currently missing, so a CLI run would use `M_min = 1`), tests first;
+  (5) explicit approval to run with `--allow-full-scale`. Size estimate:
+  about 74 bytes per row in `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
   **Next (needs user decision):** revise spec 03 (training) before any
   training work. Pending items listed below.
 - Spec 03, 04, 06: still revision 1, to be revised.
@@ -192,6 +200,8 @@
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: T02.9 requested; not executed because its approved precondition (spec 03 learning-curve study and user approval of sizes) is not met. Blockers, a missing `--m-min` CLI option, and a size estimate recorded in spec 02 tasks.md and here. No code or data changes.
 
 - 2026-10-04: T02.8 implemented: CLI and summary (code commit `811e60d`), then the first smoke dataset `data/dataset_001` (10000 rows, all checks pass) generated at that clean commit and listed in the interaction README. Generator complete. 224 tests OK.
 
