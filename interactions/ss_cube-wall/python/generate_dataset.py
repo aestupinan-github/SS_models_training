@@ -7,7 +7,9 @@ Implemented so far:
   canonicalization (R02.3).
 - T02.4, orientation sampler: near_kink by bisection on a tilt angle, and
   exclusion by body-frame direction u (R02.3, D02.3).
-Later tasks (T02.5-T02.8) add rows, checks, writer and CLI.
+- T02.5, sd sampler and row assembly with recomputed labels (R02.1, R02.2,
+  R02.4, R02.6; D02.4).
+Later tasks (T02.6-T02.8) add checks, writer and CLI.
 
 All quantities are dimensionless canonical units (L = 1), see spec 01.
 """
@@ -572,3 +574,164 @@ def sample_near_kink(shape, n, rng, delta_range=(1e-6, 1e-1), exclude_quats=None
         raise ValueError(f"delta_range must satisfy 0 < low < high, got {delta_range!r}")
     return _draw_with_exclusion(lambda m: _near_kink_batch(shape, m, rng, delta_range),
                                 n, exclude_quats, exclude_angle_deg)
+
+
+# ---------------------------------------------------------------------------
+# T02.5 sd sampler and row assembly (R02.1, R02.2, R02.4, R02.6; D02.4)
+# ---------------------------------------------------------------------------
+
+# Integer codes of the `sd_part` column (design: Data and units).
+SD_PART_CODES = {"penetration": 0, "gap": 1, "near_contact": 2, "exact_contact": 3, "gap_safety": 4}
+
+# Stored columns, in order: R02.6 columns, then D02.1 extra columns.
+ROW_COLUMNS = ("position_z", "qw", "qx", "qy", "qz", "sd", "h",
+               "orientation_id", "component", "sd_part", "delta")
+
+
+class GenerationError(RuntimeError):
+    """Failure while generating data (R02.11: non-finite values, reference errors)."""
+
+
+def allocate_counts(fractions, k):
+    """Stratified counts per part for k rows (design; D02.4).
+
+    Round half up (not Python's banker's rounding), then give any difference
+    from k to the part with the largest fraction. Sum is always k.
+    """
+    names = list(fractions)
+    counts = {n: int(math.floor(fractions[n] * k + 0.5)) for n in names}
+    largest = max(names, key=lambda n: fractions[n])
+    counts[largest] += k - sum(counts.values())
+    if counts[largest] < 0:                     # cannot happen for valid fractions; guard anyway
+        raise ValueError(f"allocation failed for k={k}: {counts}")
+    return counts
+
+
+def sample_orientations(cfg, shape, rng):
+    """Mixture of the orientation components by fractions (R02.3).
+
+    Counts per component use allocate_counts. Rows are ordered uniform, then
+    near_kink, then special (deterministic, no shuffling: R02.7). Returns
+    (quats (n_orient, 4) canonical, component (n_orient,) int8 codes).
+    """
+    validate_config(cfg)
+    counts = allocate_counts(cfg.orient_fractions, cfg.n_orient)
+    ex = dict(exclude_quats=cfg.exclude_quats, exclude_angle_deg=cfg.exclude_angle_deg)
+    quats, comps = [], []
+    for name in ("uniform", "near_kink", "special"):
+        n = counts[name]
+        if n == 0:
+            continue
+        if name == "uniform":
+            q = sample_uniform(n, rng, **ex)
+        elif name == "near_kink":
+            q, _ = sample_near_kink(shape, n, rng, delta_range=tuple(cfg.delta_range), **ex)
+        else:
+            q, _ = sample_special(shape, n, rng, **ex)
+        quats.append(q)
+        comps.append(np.full(n, COMPONENT_CODES[name], dtype=np.int8))
+    return np.concatenate(quats), np.concatenate(comps)
+
+
+def _part_assignment(cfg, n_orient, rng):
+    """sd part code for each of the n_orient * k rows (D02.4)."""
+    k = cfg.k_per_orient
+    names = list(SD_PART_CODES)
+    counts = allocate_counts(cfg.sd_fractions, k)
+    starved = any(cfg.sd_fractions[n] > 0.0 and counts[n] == 0 for n in names)
+    if not starved:
+        block = np.concatenate([np.full(counts[n], SD_PART_CODES[n], dtype=np.int8) for n in names])
+        return np.tile(block, n_orient)
+    p = np.array([cfg.sd_fractions[n] for n in names])
+    return rng.choice(np.array([SD_PART_CODES[n] for n in names], dtype=np.int8),
+                      size=n_orient * k, p=p / p.sum())
+
+
+def sample_sd(cfg, shape, h, rng):
+    """Draw sd for every row (R02.2, R02.4). h: (n_orient,) support heights.
+
+    Rows are grouped per orientation (k consecutive rows). Parts:
+      penetration   -10^U(log10 sd_log_min, log10 0.1)
+      gap           +10^U(log10 sd_log_min, log10 0.1)
+      near_contact  U(-sd_log_min, sd_log_min)
+      exact_contact 0
+      gap_safety    U(0.1, Z_PREFILTER - h); if that interval is empty
+                    (Z_PREFILTER - h <= 0.1, e.g. corner-down) the row is drawn as gap.
+    Returns (sd (n_rows,), part (n_rows,) int8 codes).
+    """
+    validate_config(cfg)
+    h = np.asarray(h, dtype=np.float64)
+    if h.shape != (cfg.n_orient,):
+        raise ValueError(f"h must have shape ({cfg.n_orient},), got {h.shape}")
+    k = cfg.k_per_orient
+    part = _part_assignment(cfg, cfg.n_orient, rng)
+    hr = np.repeat(h, k)
+    z_pre = shape.r_circ + SD_ACCURACY_MAX
+    hi_safety = z_pre - hr
+    P = SD_PART_CODES
+    part = np.where((part == P["gap_safety"]) & (hi_safety <= SD_ACCURACY_MAX), np.int8(P["gap"]), part)
+
+    lo_log, hi_log = math.log10(cfg.sd_log_min), math.log10(SD_ACCURACY_MAX)
+    n = len(part)
+    # draw every stream for all rows so the result does not depend on part order
+    log_mag = 10.0 ** rng.uniform(lo_log, hi_log, n)
+    near = rng.uniform(-cfg.sd_log_min, cfg.sd_log_min, n)
+    safety = SD_ACCURACY_MAX + rng.uniform(0.0, 1.0, n) * (hi_safety - SD_ACCURACY_MAX)
+
+    sd = np.zeros(n)
+    sd = np.where(part == P["penetration"], -log_mag, sd)
+    sd = np.where(part == P["gap"], log_mag, sd)
+    sd = np.where(part == P["near_contact"], near, sd)
+    sd = np.where(part == P["gap_safety"], safety, sd)
+    # gap safety: keep strictly above 0.1 (uniform draw of exactly 0 is possible in principle)
+    gs = part == P["gap_safety"]
+    sd[gs] = np.maximum(sd[gs], np.nextafter(SD_ACCURACY_MAX, np.inf))
+    return sd, part
+
+
+def build_rows(cfg, shape, quats, component, sd, sd_part):
+    """Assemble the stored columns (R02.1, R02.4, R02.6).
+
+    position_z = h + sd (target); then h is recomputed from the stored
+    quaternion and the stored label is sd = position_z - h, so every row is
+    self-consistent with the spec 01 reference (R02.1). Raises
+    GenerationError for non-finite values (R02.11).
+    """
+    k = cfg.k_per_orient
+    quats = np.asarray(quats, dtype=np.float64)
+    if quats.shape != (cfg.n_orient, 4) or len(component) != cfg.n_orient:
+        raise ValueError(f"expected {cfg.n_orient} orientations, got quats {quats.shape}, "
+                         f"component {np.shape(component)}")
+    if np.shape(sd) != (cfg.n_rows,) or np.shape(sd_part) != (cfg.n_rows,):
+        raise ValueError(f"expected {cfg.n_rows} rows, got sd {np.shape(sd)}, sd_part {np.shape(sd_part)}")
+    sd = np.asarray(sd, dtype=np.float64)
+    if not (np.all(np.isfinite(quats)) and np.all(np.isfinite(sd))):
+        raise GenerationError("non-finite value in orientations or sd targets")
+
+    u = u_from_quats(quats)
+    h_orient = (u @ shape.vertices.T).max(axis=1)
+    delta_orient = support_gap(shape, u)
+
+    q_rows = np.repeat(quats, k, axis=0)
+    h = np.repeat(h_orient, k)
+    position_z = h + sd
+    # exact contact rows: position_z = h exactly, so sd recomputes to exactly 0
+    label = position_z - h
+
+    rows = {
+        "position_z": position_z,
+        "qw": q_rows[:, 0].copy(),
+        "qx": q_rows[:, 1].copy(),
+        "qy": q_rows[:, 2].copy(),
+        "qz": q_rows[:, 3].copy(),
+        "sd": label,
+        "h": h,
+        "orientation_id": np.repeat(np.arange(cfg.n_orient, dtype=np.int64), k),
+        "component": np.repeat(np.asarray(component, dtype=np.int8), k),
+        "sd_part": np.asarray(sd_part, dtype=np.int8).copy(),
+        "delta": np.repeat(delta_orient, k),
+    }
+    for name in ("position_z", "sd", "h", "delta"):
+        if not np.all(np.isfinite(rows[name])):
+            raise GenerationError(f"non-finite value in column '{name}'")
+    return {name: rows[name] for name in ROW_COLUMNS}

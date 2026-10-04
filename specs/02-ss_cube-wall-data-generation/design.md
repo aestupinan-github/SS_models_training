@@ -26,6 +26,22 @@ revision 2 (approved). Supersedes design revision 1 (git history).
   arbitrary STL); spec 04 can put the symmetric images of a held-out `u`
   into the exclusion list itself.
 
+### Decision made during implementation (T02.5, agent, within the approved design)
+
+- **D02.4 Stratified vs random `sd` parts, and rounding.** The design says
+  "`round(fraction × K)` rows per part, remainder to the largest part ...
+  for small `K`, parts are assigned by a seeded random draw". "Small" was not
+  defined. Measured: with the default fractions, `K = 8` gives
+  `near_contact = 0` and `exact_contact = 0` per orientation, and Python's
+  `round` (half to even) gives `exact_contact = 0` at `K = 50`. Decision:
+  rounding is half up; stratified allocation is used only if every part
+  with a positive fraction gets at least one row per orientation; otherwise
+  every row's part is a seeded random draw with the fractions as
+  probabilities. The same `allocate_counts` rule splits `n_orient` over the
+  orientation components. With the default fractions, stratified needs
+  `K >= 50`. Recorded here because the user asked that delegated choices be
+  recorded.
+
 ## Requirements traceability
 
 | Design element | Requirements |
@@ -177,7 +193,7 @@ For each orientation, `K` rows. Each row is assigned an `sd` part by
 stratified allocation: `round(fraction × K)` rows per part, remainder to the
 largest part, so each orientation gets every part when `K` is large enough;
 for small `K`, parts are assigned by a seeded random draw with the fractions
-as probabilities.
+as probabilities. "Small `K`" and the rounding rule are fixed by D02.4.
 
 ```
 penetration:   sd = -10^U(log10 1e-5, log10 0.1)

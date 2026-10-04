@@ -6,6 +6,8 @@ T02.3: orientation sampler, uniform and special, with spin, yaw and
        canonicalization (R02.3).
 T02.4: orientation sampler, near_kink by bisection, and exclusion by u
        (R02.3, D02.3).
+T02.5: sd sampler and row assembly with recomputed labels
+       (R02.1, R02.2, R02.4, R02.6).
 """
 
 import dataclasses
@@ -24,6 +26,13 @@ from scipy.spatial.transform import Rotation as R  # noqa: E402
 from generate_dataset import (  # noqa: E402
     ConfigError,
     COMPONENT_CODES,
+    GenerationError,
+    ROW_COLUMNS,
+    SD_PART_CODES,
+    allocate_counts,
+    build_rows,
+    sample_orientations,
+    sample_sd,
     Shape,
     ShapeError,
     canonicalize_quaternions,
@@ -665,6 +674,233 @@ def _from_rot(rot0, u, n):
     psi = rng.uniform(0, 2 * np.pi, n)
     rot = R.from_rotvec(np.outer(psi, [0, 0, 1.0])) * rot0 * R.from_rotvec(np.repeat(u, n, axis=0) * phi[:, None])
     return rot.as_quat()[:, [3, 0, 1, 2]]
+
+
+class TestAllocateCounts(unittest.TestCase):
+    """Stratified counts (design; D02.4: round half up, remainder to the largest part)."""
+
+    def test_exact_default_at_k100(self):
+        c = allocate_counts(DEFAULT_SD_FRACTIONS, 100)
+        self.assertEqual(c, {"penetration": 40, "gap": 30, "near_contact": 5, "exact_contact": 1, "gap_safety": 24})
+
+    def test_sum_always_k(self):
+        for k in range(1, 400):
+            self.assertEqual(sum(allocate_counts(DEFAULT_SD_FRACTIONS, k).values()), k)
+            self.assertEqual(sum(allocate_counts(DEFAULT_ORIENT_FRACTIONS, k).values()), k)
+
+    def test_round_half_up_not_bankers(self):
+        # exact_contact 0.01 * 50 = 0.5 -> 1 (Python round(0.5) would give 0)
+        self.assertEqual(allocate_counts(DEFAULT_SD_FRACTIONS, 50)["exact_contact"], 1)
+
+    def test_zero_fraction_gets_zero(self):
+        c = allocate_counts({"uniform": 0.71, "near_kink": 0.29, "special": 0.0}, 1000)
+        self.assertEqual(c["special"], 0)
+        self.assertEqual(sum(c.values()), 1000)
+
+    def test_never_negative(self):
+        for k in range(1, 400):
+            self.assertTrue(all(v >= 0 for v in allocate_counts(DEFAULT_SD_FRACTIONS, k).values()))
+
+
+def _orients(n=1250, **kw):
+    c = cfg(n_orient=n, **kw)
+    s = _cube_shape()
+    q, comp = sample_orientations(c, s, np.random.default_rng(SEED))
+    return c, s, q, comp
+
+
+class TestSampleOrientations(unittest.TestCase):
+    """Mixture of components by fractions (R02.3), deterministic order (R02.7)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c, cls.s, cls.q, cls.comp = _orients()
+
+    def test_counts_per_component(self):
+        want = allocate_counts(DEFAULT_ORIENT_FRACTIONS, 1250)
+        for name, code in COMPONENT_CODES.items():
+            self.assertEqual(int((self.comp == code).sum()), want[name])
+        self.assertEqual(self.q.shape, (1250, 4))
+        self.assertEqual(self.comp.dtype, np.int8)
+
+    def test_order_is_by_component(self):
+        # no shuffling at generation: uniform, then near_kink, then special
+        self.assertTrue(np.all(np.diff(self.comp) >= 0))
+
+    def test_canonical(self):
+        np.testing.assert_allclose(self.q, canonicalize_quaternions(self.q), rtol=0, atol=1e-15)
+
+    def test_special_rows_have_special_u(self):
+        dirs, _ = special_directions(self.s)
+        u = u_from_quats(self.q[self.comp == COMPONENT_CODES["special"]])
+        self.assertLess(np.abs(u @ dirs.T).max(axis=1).min(), 1.0 + 1e-14)
+        self.assertGreater(np.abs(u @ dirs.T).max(axis=1).min(), 1.0 - 1e-14)
+
+    def test_reproducible(self):
+        a = sample_orientations(self.c, self.s, np.random.default_rng(1))
+        b = sample_orientations(self.c, self.s, np.random.default_rng(1))
+        self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
+
+    def test_exclusion_passed_through(self):
+        excl = sample_uniform(4, np.random.default_rng(9))
+        c, s, q, comp = _orients(exclude_quats=excl, exclude_angle_deg=20.0)
+        self.assertFalse(np.any(exclusion_mask(q, excl, 20.0)))
+
+    def test_validates_config(self):
+        with self.assertRaises(ConfigError):
+            sample_orientations(cfg(n_orient=0), self.s, np.random.default_rng(1))
+
+
+class TestSampleSd(unittest.TestCase):
+    """sd parts and ranges (R02.2, R02.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.s = _cube_shape()
+        cls.c = cfg(n_orient=100, k_per_orient=100)          # stratified (K = 100)
+        rng = np.random.default_rng(SEED)
+        cls.h = support_gap(cls.s, u_from_quats(sample_uniform(100, rng))) * 0 + \
+            (u_from_quats(sample_uniform(100, np.random.default_rng(2))) @ cls.s.vertices.T).max(axis=1)
+        cls.sd, cls.part = sample_sd(cls.c, cls.s, cls.h, np.random.default_rng(SEED))
+        cls.hr = np.repeat(cls.h, 100)
+
+    def test_lengths_and_codes(self):
+        self.assertEqual(self.sd.shape, (10000,))
+        self.assertEqual(self.part.dtype, np.int8)
+        self.assertEqual(SD_PART_CODES, {"penetration": 0, "gap": 1, "near_contact": 2,
+                                         "exact_contact": 3, "gap_safety": 4})
+
+    def test_ranges_per_part(self):
+        P = SD_PART_CODES
+        sd, part = self.sd, self.part
+        pen, gap, near = sd[part == P["penetration"]], sd[part == P["gap"]], sd[part == P["near_contact"]]
+        self.assertTrue(np.all((pen >= -0.1) & (pen <= -1e-5)))
+        self.assertTrue(np.all((gap >= 1e-5) & (gap <= 0.1)))
+        self.assertTrue(np.all((near > -1e-5) & (near < 1e-5)))
+        self.assertTrue(np.all(sd[part == P["exact_contact"]] == 0.0))
+        gs = part == P["gap_safety"]
+        self.assertTrue(np.all(sd[gs] > 0.1))
+        self.assertTrue(np.all(sd[gs] <= cw.Z_PREFILTER - self.hr[gs]))
+
+    def test_stratified_per_orientation(self):
+        want = allocate_counts(DEFAULT_SD_FRACTIONS, 100)
+        parts = self.part.reshape(100, 100)
+        for code_name, code in SD_PART_CODES.items():
+            per = (parts == code).sum(axis=1)
+            if code_name in ("gap", "gap_safety"):
+                # gap safety may fall back to gap (empty interval); the total is preserved
+                continue
+            self.assertTrue(np.all(per == want[code_name]), msg=code_name)
+        both = ((parts == SD_PART_CODES["gap"]) | (parts == SD_PART_CODES["gap_safety"])).sum(axis=1)
+        self.assertTrue(np.all(both == want["gap"] + want["gap_safety"]))
+
+    def test_log_uniform_penetration(self):
+        pen = -self.sd[self.part == SD_PART_CODES["penetration"]]
+        counts = [int(((pen >= a) & (pen < 10 * a)).sum()) for a in 10.0 ** np.arange(-5, -1)]
+        for cnt in counts:
+            self.assertGreater(cnt, 0.8 * len(pen) / 4)
+            self.assertLess(cnt, 1.2 * len(pen) / 4)
+
+    def test_gap_safety_fallback_at_corner_down(self):
+        # corner-down: Z_PREFILTER - h = 0.1 exactly -> empty interval -> drawn as gap
+        h = np.full(20, math.sqrt(3) / 2)
+        sd, part = sample_sd(cfg(n_orient=20, k_per_orient=100), self.s, h, np.random.default_rng(1))
+        self.assertEqual(int((part == SD_PART_CODES["gap_safety"]).sum()), 0)
+        self.assertTrue(np.all(sd <= 0.1))
+
+    def test_random_parts_for_small_k(self):
+        # K = 8: stratified would drop near_contact and exact_contact (D02.4) -> random draw
+        c = cfg(n_orient=1250, k_per_orient=8)
+        h = np.full(1250, 0.6)
+        sd, part = sample_sd(c, self.s, h, np.random.default_rng(SEED))
+        frac = {k: (part == v).mean() for k, v in SD_PART_CODES.items()}
+        for k, f in DEFAULT_SD_FRACTIONS.items():
+            self.assertAlmostEqual(frac[k], f, delta=4 * math.sqrt(f * (1 - f) / 10000) + 1e-3, msg=k)
+        self.assertGreater(int((part == SD_PART_CODES["exact_contact"]).sum()), 0)
+
+    def test_custom_sd_log_min(self):
+        sd, part = sample_sd(cfg(n_orient=100, k_per_orient=100, sd_log_min=1e-8), self.s, self.h,
+                             np.random.default_rng(1))
+        pen = -sd[part == SD_PART_CODES["penetration"]]
+        self.assertGreaterEqual(pen.min(), 1e-8)
+        self.assertLess(pen.min(), 1e-6)
+
+    def test_reproducible(self):
+        a = sample_sd(self.c, self.s, self.h, np.random.default_rng(5))
+        b = sample_sd(self.c, self.s, self.h, np.random.default_rng(5))
+        self.assertTrue(np.array_equal(a[0], b[0]) and np.array_equal(a[1], b[1]))
+
+    def test_h_length_must_match(self):
+        with self.assertRaises(ValueError):
+            sample_sd(self.c, self.s, self.h[:10], np.random.default_rng(1))
+
+
+class TestBuildRows(unittest.TestCase):
+    """Row assembly with recomputed labels (R02.1, R02.4, R02.6)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.c, cls.s, cls.q, cls.comp = _orients()
+        h = (u_from_quats(cls.q) @ cls.s.vertices.T).max(axis=1)
+        cls.sd, cls.part = sample_sd(cls.c, cls.s, h, np.random.default_rng(SEED))
+        cls.rows = build_rows(cls.c, cls.s, cls.q, cls.comp, cls.sd, cls.part)
+
+    def test_columns_order_and_dtypes(self):
+        self.assertEqual(ROW_COLUMNS, ("position_z", "qw", "qx", "qy", "qz", "sd", "h",
+                                       "orientation_id", "component", "sd_part", "delta"))
+        self.assertEqual(tuple(self.rows), ROW_COLUMNS)
+        for name in ("position_z", "qw", "qx", "qy", "qz", "sd", "h", "delta"):
+            self.assertEqual(self.rows[name].dtype, np.float64, msg=name)
+        self.assertEqual(self.rows["orientation_id"].dtype, np.int64)
+        self.assertEqual(self.rows["component"].dtype, np.int8)
+        self.assertEqual(self.rows["sd_part"].dtype, np.int8)
+        for a in self.rows.values():
+            self.assertEqual(a.shape, (self.c.n_rows,))
+
+    def test_orientation_id_and_quaternion_blocks(self):
+        oid = self.rows["orientation_id"]
+        np.testing.assert_array_equal(oid, np.repeat(np.arange(self.c.n_orient), self.c.k_per_orient))
+        qs = np.c_[self.rows["qw"], self.rows["qx"], self.rows["qy"], self.rows["qz"]]
+        np.testing.assert_array_equal(qs, np.repeat(self.q, self.c.k_per_orient, axis=0))
+        np.testing.assert_array_equal(self.rows["component"], np.repeat(self.comp, self.c.k_per_orient))
+
+    def test_labels_match_reference(self):
+        r = self.rows
+        idx = np.random.default_rng(1).choice(self.c.n_rows, 2000, replace=False)
+        for i in idx:
+            q = [r["qw"][i], r["qx"][i], r["qy"][i], r["qz"][i]]
+            ref = cw.compute_signed_distance(q, r["position_z"][i])
+            self.assertLessEqual(abs(r["sd"][i] - ref), 1e-12)
+            self.assertLessEqual(abs(r["h"][i] - cw.z_touch(q)), 1e-12)
+        np.testing.assert_array_equal(r["sd"], r["position_z"] - r["h"])
+
+    def test_labels_close_to_targets(self):
+        np.testing.assert_allclose(self.rows["sd"], self.sd, rtol=0, atol=1e-15)
+        self.assertTrue(np.all(self.rows["sd"][self.part == SD_PART_CODES["exact_contact"]] == 0.0))
+
+    def test_ranges_and_prefilter(self):
+        r = self.rows
+        self.assertGreaterEqual(r["sd"].min(), -0.1 - 1e-15)
+        self.assertLessEqual(r["position_z"].max(), cw.Z_PREFILTER)
+        self.assertGreater(r["position_z"].min(), 0.0)
+
+    def test_delta_column(self):
+        qs = np.c_[self.rows["qw"], self.rows["qx"], self.rows["qy"], self.rows["qz"]]
+        np.testing.assert_array_equal(self.rows["delta"], support_gap(self.s, u_from_quats(qs)))
+
+    def test_all_parts_and_components_present(self):
+        self.assertEqual(set(np.unique(self.rows["component"])), set(COMPONENT_CODES.values()))
+        self.assertEqual(set(np.unique(self.rows["sd_part"])), set(SD_PART_CODES.values()))
+
+    def test_non_finite_raises_generation_error(self):
+        bad = self.sd.copy()
+        bad[3] = np.nan
+        with self.assertRaises(GenerationError):
+            build_rows(self.c, self.s, self.q, self.comp, bad, self.part)
+
+    def test_length_mismatch(self):
+        with self.assertRaises(ValueError):
+            build_rows(self.c, self.s, self.q[:-1], self.comp[:-1], self.sd, self.part)
 
 
 if __name__ == "__main__":

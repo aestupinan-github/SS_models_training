@@ -75,10 +75,12 @@
   samplers with spin, yaw, canonicalization), T02.4 done (`near_kink` by
   bisection on tilt angle, exclusion by `u` in all samplers, D02.3), in
   `generate_dataset.py`. 135 tests OK.
-  **Next: T02.5** (`sd` sampler with stratified parts per orientation,
-  gap-safety fallback, row assembly with recomputed labels, mixture of
-  components by fractions, columns incl. `sd_part`, `delta` per D02.1).
-  T02.5-T02.8 not started; each waits for the user's go.
+  T02.5 done (`sample_orientations` mixture, `sample_sd`
+  five parts with gap-safety fallback, `build_rows` with recomputed labels;
+  D02.4 rounding/stratification decision). 165 tests OK.
+  **Next: T02.6** (coverage table per decade of |sd| and Delta, acceptance
+  checks per R02.12 that fail on a corrupted row). T02.6-T02.8 not started;
+  each waits for the user's go. No dataset file exists yet (writer is T02.7).
 - Spec 03, 04, 06: still revision 1, to be revised.
 - Pending: spec 03 (replace transform, Option B, orientation-based split,
   learning-curve study, sign-invariant input, mini-batch training), spec 04
@@ -155,6 +157,8 @@
   project root.
 
 ## Recent changes
+
+- 2026-10-03: T02.5 implemented and committed: orientation mixture, sd sampler (5 parts, gap-safety fallback), row assembly with recomputed labels (0.0 error vs spec 01 reference on 10000 rows). D02.4 recorded. 165 tests OK.
 
 - 2026-10-03: T02.4 implemented and committed: `sample_near_kink` (worst relative Delta error 6.5e-10 on the cube incl. quaternion chain; 1e5 rows 0.74 s), `exclusion_mask`, exclusion in all samplers (raises instead of looping when impossible). Two test expectations corrected and recorded in tasks.md and design.md (edge-like definition; tetrahedron tolerance). 135 tests OK.
 
