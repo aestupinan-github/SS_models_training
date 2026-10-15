@@ -4,7 +4,8 @@
 
 **DRAFT, revision 2, 2026-10-04. Not approved.** Supersedes revision 1 (git
 history). Built on the decisions approved by the user on 2026-10-04
-(S03.1-S03.8 in `MEMORY.md`, "Spec 03 decisions"). Review issue numbers are
+(S03.1-S03.8 in `MEMORY.md`, "Spec 03 decisions"). R03.4 output conventions
+confirmed by the user for a first try (2026-10-04). Review issue numbers are
 cited in brackets. `design.md` and `tasks.md` are not updated until this file
 is approved. Items marked *[OPEN]* need a user decision.
 
@@ -71,14 +72,18 @@ exported model computes, and what each run records and reports.
 - IF the quaternion has zero norm or a non-finite component, or
   `position_z` is non-finite, THEN THE MODEL SHALL return status `invalid`.
 - Otherwise status `in_range`.
-- *[OPEN]* Status values: proposed `0 in_range`, `1 far`, `2 too_deep`,
-  `3 invalid`.
-- *[OPEN]* `sd` returned for `far`: proposed `position_z - R_CIRC`, a
-  guaranteed lower bound of the exact `sd`, always above `0.1`; alternative
-  `+inf`.
-- *[OPEN]* `sd` returned for `invalid`: proposed NaN.
+- Status values: `0 in_range`, `1 far`, `2 too_deep`, `3 invalid`.
+  *Confirmed (user, 2026-10-04, "for a first try")*; may be revised after the
+  first LIGGGHTS trial.
+- `sd` returned for `far`: `position_z - R_CIRC`, a guaranteed lower bound of
+  the exact `sd`, always above `0.1`, finite. *Confirmed (user, first try).*
+  Note: at `Z_PREFILTER` the returned `sd` steps from up to `SD_COVER_MAX`
+  (network) to `0.1`; both are gaps with zero force.
+- `sd` returned for `invalid`: NaN, with status `3`, so an unchecked status
+  fails visibly. *Confirmed (user, first try).*
 - Limitation: `too_deep` can only use the predicted `sd`; the exact value is
-  not known at runtime.
+  not known at runtime. A misclassification near `-0.1` is never larger than
+  the model's own error.
 
 ### R03.5 Training data [10]
 
@@ -200,6 +205,7 @@ Each run SHALL report, on the validation set:
 
 ## Open questions
 
-- Status code values and `sd` for `far` and `invalid` (R03.4).
 - Tolerances for R03.8 metrics: after the baseline (spec 04 / spec 07).
+- R03.4 conventions are a first try; revisit after the first LIGGGHTS trial
+  (integration project).
 - GPU reproducibility tolerance: set in the design.

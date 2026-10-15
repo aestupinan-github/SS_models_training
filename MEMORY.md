@@ -110,8 +110,9 @@
   run with `--allow-full-scale`. Size estimate: about 74 bytes per row in
   `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
   **Now:** spec 03 (training) revision in progress. Decisions approved by
-  the user 2026-10-04 (see "Spec 03 decisions"); requirements rev 2 written
-  as DRAFT, awaiting user review. Design and tasks not yet revised.
+  the user 2026-10-04 (see "Spec 03 decisions", incl. S03.9 output
+  conventions); requirements rev 2 written as DRAFT with R03.4 resolved,
+  awaiting explicit user approval. Design and tasks not yet revised.
 - Spec 04, 05, 06: still revision 1, to be revised (see "Side effects for
   later").
 - Pending: spec 04 (off-anchor definition, invariance tests, tumbling-path
@@ -175,11 +176,13 @@ slower than float32 (267 vs 7900 GFLOP/s).
   the caller (9); read spec 02 `.npz` and its `h`, `sd`, `orientation_id`
   (10); provenance, determinism, smoke limits, `run_XXX` folders, error
   handling (12); full SDD template (13).
-- Open questions in the draft (for the user): status code values
-  (0 in range, 1 far, 2 too deep, 3 invalid quaternion); `sd` returned when
-  far (`z - R_CIRC`, a guaranteed lower bound) or `+inf`; `sd` NaN with
-  status 3 when invalid; `too_deep` detected only from predicted `sd`
-  (limitation).
+- **S03.9 Output conventions (user, 2026-10-04: "I'll follow your
+  suggestions here for a first try"):** status `0 in_range`, `1 far`,
+  `2 too_deep`, `3 invalid`; `sd = position_z - R_CIRC` when far (finite
+  lower bound, always > 0.1); `sd = NaN` with status 3 when invalid;
+  `too_deep` from predicted `sd` only (limitation). First try: revisit after
+  the first LIGGGHTS trial.
+- Still open: metric tolerances, set by the user after the baseline.
 
 ## Side effects for later (recorded 2026-10-04)
 
@@ -285,6 +288,8 @@ slower than float32 (267 vs 7900 GFLOP/s).
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: Spec 03 R03.4 open questions resolved with the agent's proposals (user: first try), recorded as S03.9; requirements still DRAFT pending approval.
 
 - 2026-10-04: Spec 03 decisions S03.1-S03.8 approved by the user and recorded; side effects for specs 04, 05, 06, 02 and `.gitignore` recorded; spec 03 requirements rev 2 written as DRAFT.
 
