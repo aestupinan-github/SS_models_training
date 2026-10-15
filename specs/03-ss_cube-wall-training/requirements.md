@@ -8,6 +8,9 @@ history). Built on the decisions approved by the user on 2026-10-04
 confirmed by the user for a first try (2026-10-04). Amended 2026-10-04
 (user change request, option A, decision S03.10): R03.2, R03.11 changed,
 R03.16 added for `scalers.dat`; amendment approved by the user ("ok").
+R03.16 revised 2026-10-04 (S03.11, user "go on"): no compatibility with
+the old reference code; adds run id, model checksum and reference
+input/output pairs for load-time verification.
 Review issue numbers are
 cited in brackets. `design.md` and `tasks.md` are not updated until this file
 is approved. Items marked *[OPEN]* need a user decision.
@@ -178,21 +181,38 @@ Each run SHALL report, on the validation set:
   return the run folder and metrics, so spec 07 can run it on several
   dataset sizes.
 
-### R03.16 `scalers.dat` for C++ *[new 2026-10-04, S03.10, user: option A]*
+### R03.16 `scalers.dat` for C++ *[new 2026-10-04, S03.10, user: option A; revised 2026-10-04, S03.11]*
+
+Purpose: a plain-text record of the exported model, so C++ code can verify
+at load time that it uses the model correctly. It is not needed to compute
+`sd`. No compatibility with the old reference code is required (user,
+2026-10-04: the old model is only a reference).
 
 - Each run SHALL write `scalers.dat`, plain text, next to `model.pt`.
-- Its values SHALL equal the scaling and constants stored inside the
-  exported model (checked by a test).
-- It SHALL be readable by the existing key/value C++ loader of the
-  reference code: a key line followed by a value line; keys `y_mean`,
-  `y_scale`, `eps` present; `y_scale != 0`; other keys allowed (ignored by
-  that loader).
-- It SHALL carry a format version and state what the scaling applies to,
-  so it cannot be mistaken for the old log-transform file.
+- It SHALL contain: a format version; the id of the run that wrote it and
+  the sha256 of `model.pt`; the input and output definition (columns, order,
+  units, dtype, status codes); the scaling values used inside the model
+  (`y_mean`, `y_scale` of `h`); the model constants (`r_circ`,
+  `z_prefilter`, `sd_too_deep`).
+- It SHALL contain a fixed set of **reference input/output pairs**: inputs
+  covering every status code, face-, edge- and corner-down orientations,
+  `q` with `-q`, and a non-unit quaternion; for each, the `sd` and status
+  the exported model returns.
+- Its values SHALL equal the model's: scaling and constants equal the model
+  buffers exactly. Running `model.pt` on the reference inputs SHALL
+  reproduce the reference statuses exactly and the reference `sd` bit for
+  bit when evaluated one row per call (float64, CPU), and within an
+  absolute tolerance `REF_SD_TOL = 1e-14` for any batch size or thread
+  count. Checked by a test. The file states both rules.
+  *Reason (measured 2026-10-04):* the `%.17g` text round trip and a
+  TorchScript save/load are exact, but the same float64 network gives
+  last-bit differences (up to 4.4e-16) between row-by-row and batched
+  evaluation (batches of 20 or more) and between thread counts.
+- The format SHALL be parseable in C++ with the standard library only.
 - Floating-point values SHALL be written with 17 significant digits (exact
   float64 round trip).
 - The model output `sd` is final. C++ code SHALL NOT apply `scalers.dat`
-  values to the model output a second time. (Constraint for spec 06.)
+  values to the model output. (Constraint for spec 06.)
 - Exact layout: design decision D03.1.
 
 ## Numerical and physical requirements

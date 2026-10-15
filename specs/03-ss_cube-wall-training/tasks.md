@@ -10,8 +10,8 @@ fail, implement, run all tests, commit, update MEMORY.md, stop.
   - Files: `surrogate_model.py` (`UFeature`, `HNet`), `tests/test_surrogate_model.py`.
   - Done when: `u(q)` matches scipy's `-R^T e_z` within 1e-15; `q` and `-q` give bit-identical `u`; `HNet` builds from a hidden-size tuple and activation name.
 - [ ] **T03.2 Exported model with status codes, and `scalers.dat`.** R03.2, R03.4, R03.9, R03.16
-  - Files: `surrogate_model.py` (`SurrogateModel`, status constants, `export`, `write_scalers`, `read_scalers`).
-  - Done when: float64 `(N, 5) -> (sd, status)`; `sd = z - h_pred`; `far`, `too_deep`, `invalid` cases and mixed batches as specified; TorchScript save and load round trip; outputs equal before and after loading; `scalers.dat` values equal the model buffers and constants exactly and are read by a parser that mimics the reference loader (D03.1).
+  - Files: `surrogate_model.py` (`SurrogateModel`, status constants, `export`, `write_model_record`, `read_model_record`).
+  - Done when: float64 `(N, 5) -> (sd, status)`; `sd = z - h_pred`; `far`, `too_deep`, `invalid` cases and mixed batches as specified; TorchScript save and load round trip; outputs equal before and after loading; `scalers.dat` scaling and constants equal the model buffers exactly; `model_sha256` matches; the loaded `model.pt` reproduces every reference pair (status exactly; `sd` bit for bit one row per call, within 1e-14 batched); all status codes covered (R03.16, D03.1).
 - [ ] **T03.3 Config, dataset loader, split.** R03.5, R03.6, R03.12, R03.13, R03.14
   - Files: `train_surrogate.py` (`TrainConfig`, `validate_train_config`, `load_dataset`, `split_by_orientation`), `tests/test_train_surrogate.py`.
   - Done when: invalid configs and smoke-limit violations raise `TrainConfigError`; checksum mismatch, missing file or column raise `DatasetError`; split is disjoint by orientation, seeded and reproducible.

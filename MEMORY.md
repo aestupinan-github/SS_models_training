@@ -50,9 +50,8 @@
   old model is only a reference for you to know what I did before. I'm
   trying to create something more robust and accurate." Consequence: no
   requirement or design choice may exist only to stay compatible with the
-  old code (formats, loaders, transforms). D03.1 and R03.16 currently tie
-  `scalers.dat` to the old C++ loader; a revision is proposed (pending user
-  approval).
+  old code (formats, loaders, transforms). Applied 2026-10-04: D03.1 and
+  R03.16 revised (S03.11), no longer tied to the old C++ loader.
 - Code that exists: `interactions/ss_cube-wall/python/cube_wall.py`
   (spec 01 reference solution and contract helpers),
   `interactions/ss_cube-wall/python/smoke_contract.py` (contract smoke test),
@@ -119,7 +118,9 @@
   **Now:** spec 03 (training) revision in progress. Decisions approved by
   the user 2026-10-04 (see "Spec 03 decisions", incl. S03.9 output
   conventions); requirements rev 2 APPROVED (2026-10-04, "ok"), amended
-  the same day for `scalers.dat` (S03.10, D03.1; amendment approved).
+  the same day for `scalers.dat` (S03.10, D03.1; amendment approved) and
+  revised again (S03.11: record for load-time verification with reference
+  pairs, no old-loader compatibility).
   Design and tasks rev 2 written as DRAFT (7 tasks T03.1-T03.7), updated for
   `scalers.dat`, awaiting user approval. No training code yet. Feasibility probe (2026-10-04, not a
   result): TorchScript export with status codes works; q/-q bit-identical
@@ -210,25 +211,42 @@ slower than float32 (267 vs 7900 GFLOP/s).
   scalers.dat" removed; "no joblib" kept). Requirements R03.2, R03.11
   changed, R03.16 added. Options B (C++ applies the scaling) and C (both)
   rejected: logic split between model and C++, risk of wrong scaling.
-- **D03.1 (agent; user: "I'll let you decide").** `scalers.dat` uses the
-  key/value layout of the reference C++ loader (read 2026-10-04: key line
-  then value line, any order, requires `y_mean` and `y_scale`, rejects
-  `y_scale == 0`, `eps` optional, unknown keys ignored). Keys: `format`
-  (`ss_scalers_v1`), `y_mean`, `y_scale` (mean and std of `h` on the
-  training split, stored as model buffers), `eps` = 0 (no log transform),
-  `applies_to` (h inside model; output sd is final), `inputs`, `outputs`,
-  `r_circ`, `z_prefilter`, `sd_too_deep`, `status_codes`. 17 significant
-  digits. **Warning:** the reference C++ code computes
-  `10^(pred*y_scale + y_mean) - eps`; with the new model that is wrong,
-  because `sd` is already final (constraint for spec 06).
+- **D03.1 (agent; user: "I'll let you decide"; revised 2026-10-04 by
+  S03.11).** `scalers.dat` layout: one `key value...` record per line,
+  whitespace-separated, `#` comment lines, parseable in C++ with the
+  standard library only; unique keys plus repeated `ref` lines. Contents:
+  `format ss_model_record_v1`, `run_id`, `model_sha256`, input/output
+  definition (columns, dtype, units), `status_codes`, `y_mean` and
+  `y_scale` of `h` (training split, model buffers), `r_circ`,
+  `z_prefilter`, `sd_too_deep`, `n_ref` and the reference pairs; 17
+  significant digits. JSON rejected (needs a parser library in C++).
+  Superseded first version: the old C++ loader's layout with `eps`.
+- **S03.11 (user, 2026-10-04: "go on, and record everything
+  accordingly").** Following "the old model is only a reference":
+  `scalers.dat` is a record for **load-time verification**, not for
+  reproducing the model. Dropped: compatibility with the old loader, the
+  `eps` key, comparisons with the old inverse transform. Added: run id,
+  `model.pt` sha256, and a fixed set of reference input/output pairs (every
+  status code; face-, edge-, corner-down; `q` and `-q`; non-unit `q`). The
+  loaded `model.pt` must reproduce the statuses exactly and `sd` bit for bit
+  one row per call (CPU, float64), and within `REF_SD_TOL = 1e-14` for any
+  batch size or thread count; checked by a test. *Measured 2026-10-04:*
+  `%.17g` text round trip and TorchScript save/load are exact, but batched
+  evaluation (batch >= 20) and thread count change the last bit (up to
+  4.4e-16), so bitwise only for one row per call. Purpose: C++ can detect wrong column order, quaternion order
+  (xyzw vs wxyz), float32 use, or the wrong model file before simulating.
+  R03.16 rewritten; design D03.1 and the `scalers.dat` section rewritten;
+  T03.2 updated.
 
 ## Side effects for later (recorded 2026-10-04)
 
 - **Spec 06 (C++ test)** still describes the old transform
   (`10^pred - EPS`), `scalers.dat` as an input to an inverse transform, and a
   clamp to `[-0.5, 0.1]`. Must be revised to the TorchScript interface with
-  status code: use `sd` directly, read `scalers.dat` only for information or
-  for a consistency check, never apply it to the output (S03.10, D03.1).
+  status code: use `sd` directly; never apply `scalers.dat` to the output;
+  at load time, run the reference inputs from `scalers.dat` and compare
+  with the reference outputs: status exactly, `sd` within `ref_sd_tol`
+  (bitwise only one row per call) (S03.10, S03.11, D03.1).
 - **Spec 04 (evaluation)** artifact layout (`run_XXX`) is referenced by spec
   03; it must also gain the R01.17/R01.18 metrics and the tumbling-path test,
   define "off-anchor", and use spec 02's exclusion by `u` for held-out sets.
@@ -332,6 +350,8 @@ slower than float32 (267 vs 7900 GFLOP/s).
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: S03.11 applied: R03.16 rewritten (scalers.dat = verification record with run id, model checksum and reference input/output pairs; no old-loader compatibility); design D03.1 and its section rewritten (also fixed two merged paragraphs); T03.2 updated; spec 06 side effect updated. Measured: bitwise reproduction only one row per call; batched within 1e-14 (REF_SD_TOL).
 
 - 2026-10-04: User clarified that the old model is only a reference; recorded under Confirmed facts. Revision of D03.1/R03.16 (drop compatibility with the old C++ loader) proposed, pending approval.
 

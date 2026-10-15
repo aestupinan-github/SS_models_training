@@ -9,16 +9,19 @@ S03.10). Supersedes design revision 1 (git history).
 ### Decisions
 
 - **D03.1 `scalers.dat` layout (agent, delegated by the user 2026-10-04:
-  "I'll let you decide").** Key/value lines in the layout of the reference
-  C++ loader (`inspired_codes/CPP_test/test_surrogate_*.cpp`, read
-  2026-10-04: it reads a key line then a value line, in any order; requires
-  `y_mean` and `y_scale`, rejects `y_scale == 0`; `eps` optional; unknown
-  keys ignored). So one file is readable by that loader and also documents
-  the new interface. `eps` is written as `0` (no log transform). Extra keys
-  give the format version, what the scaling applies to, the input order and
-  the model constants. Reason: no new parser needed in C++, and the file
-  states plainly that the old inverse transform does not apply. Alternative
-  (a new format, e.g. JSON) rejected: the existing loader could not read it.
+  "I'll let you decide"; revised 2026-10-04, S03.11).** One `key value...`
+  record per line, whitespace-separated, `#` starts a comment line; parsed
+  in C++ with `std::getline` and `std::istringstream` only. Keys are
+  unique except `ref`, which repeats (one reference pair per line).
+  Contents: format version, run id, `model.pt` sha256, input and output
+  definition, status codes, `y_mean` and `y_scale` of `h`, constants, and
+  the reference input/output pairs. Reason: easy to read and to check by
+  hand, no parser library needed, and the reference pairs let C++ verify
+  column order, quaternion order, dtype and model identity at load time.
+  *Superseded first version (same day):* the layout of the old reference
+  C++ loader with an `eps` key; dropped because no compatibility with the
+  old code is wanted (user: the old model is only a reference). Rejected
+  alternative: JSON, which needs a parser library in C++.
 
 ## Requirements traceability
 
@@ -64,7 +67,7 @@ S03.10). Supersedes design revision 1 (git history).
 
 | File | Responsibility | Change |
 |---|---|---|
-| `interactions/ss_cube-wall/python/surrogate_model.py` | `UFeature`, `HNet`, `SurrogateModel`, status codes, export, `scalers.dat` writer and reader | New |
+| `interactions/ss_cube-wall/python/surrogate_model.py` | `UFeature`, `HNet`, `SurrogateModel`, status codes, export, `scalers.dat` writer and reader (`write_model_record`, `read_model_record`) | New |
 | `interactions/ss_cube-wall/python/train_surrogate.py` | Config, loader, split, loss, loop, metrics, run writer, `train()`, CLI | New |
 | `tests/test_surrogate_model.py` | Model and interface tests | New |
 | `tests/test_train_surrogate.py` | Training pipeline tests | New |
@@ -101,6 +104,10 @@ Constants `R_CIRC`, `Z_PREFILTER`, the `-0.1` bound are stored as module
 attributes, taken from `cube_wall` at build time, and recorded in the run
 record and in `scalers.dat`.
 
+The network is evaluated for every row (vectorized); `far` rows overwrite
+the result. This meets R03.4 "SHALL NOT need the network" because the
+result for `far` rows does not depend on it.
+
 ### `scalers.dat` (R03.16, D03.1)
 
 Output scaling: `y_mean`, `y_scale` are the mean and standard deviation of
@@ -110,37 +117,45 @@ training and stored as `HNet` buffers. The MLP learns the scaled target
 No input scaling: `u` is a unit vector.
 
 ```
-format
-ss_scalers_v1
-y_mean
-<17 significant digits>
-y_scale
-<17 significant digits>
-eps
-0
-applies_to
-h_inside_model_output_sd_is_final
-inputs
-position_z qw qx qy qz
-outputs
-sd status
-r_circ
-<17 significant digits>
-z_prefilter
-<17 significant digits>
-sd_too_deep
--0.1
-status_codes
-0_in_range 1_far 2_too_deep 3_invalid
+# ss_cube-wall surrogate: plain-text record of model.pt (spec 03 R03.16)
+# The model output sd is final. Do not apply these values to it.
+format ss_model_record_v1
+run_id run_001
+model_sha256 <64 hex>
+inputs position_z qw qx qy qz
+input_dtype float64
+input_units canonical_L1
+outputs sd status
+output_dtype float64 int64
+status_codes 0:in_range 1:far 2:too_deep 3:invalid
+y_mean <17 significant digits>
+y_scale <17 significant digits>
+r_circ <17 significant digits>
+z_prefilter <17 significant digits>
+sd_too_deep -0.10000000000000001
+ref_eval one_row_per_call_float64_cpu
+ref_sd_tol 1e-14
+n_ref <n>
+# ref columns: position_z qw qx qy qz sd status   (%.17g; sd nan for invalid)
+# sd is bitwise for one row per call; within ref_sd_tol for any batch size
+ref 0.69999999999999996 1 0 0 0 0.19... 0
+ref ...
 ```
 
-Written by `write_scalers(model, path)`; `read_scalers(path)` parses it
-the same way as the reference loader (key line, value line, unknown keys
-kept) and is used by the tests. Warning recorded for spec 06: the reference
-C++ code computes `10^(pred * y_scale + y_mean) - eps`; with this model that
-would be wrong, because `sd` is already final. The network is evaluated for every row (vectorized); `far` rows
-overwrite the result. This meets R03.4 "SHALL NOT need the network" because
-the result for `far` rows does not depend on it.
+Reference inputs (fixed, 17 digits): face-down, edge-down and corner-down
+orientations at heights giving gap, contact and overlap; one random
+orientation and its `-q`; a non-unit quaternion (`2q`); a `far` row
+(`z > z_prefilter`); a `too_deep` row (deep overlap); an `invalid` row
+(zero quaternion). The outputs are computed by the exported float64 model
+on CPU, one row per call, when the file is written. Measured 2026-10-04:
+text round trip and save/load are exact; batched evaluation (batch >= 20)
+and thread count change the last bit (up to 4.4e-16), hence `ref_sd_tol`.
+
+`write_model_record(model, path, run_id, model_sha256)` writes it;
+`read_model_record(path)` parses it (unique keys to a dict, `ref` lines to a
+list) and is used by the tests. Constraint recorded for spec 06: C++ uses
+`sd` directly; it may use `scalers.dat` to verify the loaded model by
+running the reference inputs.
 
 `u` is quadratic in `q`, so `q -> -q` gives identical `u` bit for bit
 (R03.3, measured).
@@ -271,7 +286,7 @@ MEMORY).
 | Status: `far` above `Z_PREFILTER` with `sd = z - R_CIRC`; `too_deep`; `invalid` with NaN; mixed batch; batch of one; `z = Z_PREFILTER` is `in_range` | R03.4 |
 | `sd = z - h_pred` exactly (slope 1) | R03.1 |
 | Float64 export equals float32 network within 1e-6 | R03.9 |
-| `scalers.dat`: values equal model buffers and constants exactly; reader mimicking the reference loader finds `y_mean`, `y_scale`, `eps`, ignores unknown keys; `y_scale != 0`; 17-digit round trip | R03.16 |
+| `scalers.dat`: scaling and constants equal the model buffers exactly; `model_sha256` matches `model.pt`; running the loaded `model.pt` on every `ref` input reproduces its status exactly and its `sd` bit for bit one row per call, and within `ref_sd_tol` as one batch (CPU, float64); every status code covered; 17-digit round trip; parse with whitespace splitting only | R03.16 |
 | Loader: checksum mismatch, missing file, missing column raise `DatasetError` | R03.5, R03.13 |
 | Split: disjoint orientation sets, fraction, reproducible | R03.6 |
 | Config validation and smoke limits | R03.12, R03.14 |
