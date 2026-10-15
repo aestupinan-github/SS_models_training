@@ -5,7 +5,10 @@
 **Revision 2, 2026-10-04. APPROVED by the user (2026-10-04, "ok").** Supersedes revision 1 (git
 history). Built on the decisions approved by the user on 2026-10-04
 (S03.1-S03.8 in `MEMORY.md`, "Spec 03 decisions"). R03.4 output conventions
-confirmed by the user for a first try (2026-10-04). Review issue numbers are
+confirmed by the user for a first try (2026-10-04). Amended 2026-10-04
+(user change request, option A, decision S03.10): R03.2, R03.11 changed,
+R03.16 added for `scalers.dat`; amendment approved by the user ("ok").
+Review issue numbers are
 cited in brackets. `design.md` and `tasks.md` are not updated until this file
 is approved. Items marked *[OPEN]* need a user decision.
 
@@ -55,6 +58,9 @@ exported model computes, and what each run records and reports.
   shape `(N,)`, integer (R03.4).
 - The model SHALL be a single TorchScript file and need no other file and no
   Python at runtime (constitution 13). Any scaling lives inside it.
+- *[changed 2026-10-04, S03.10]* A plain-text `scalers.dat` is written next
+  to the model as a record of the scaling and constants used inside it
+  (R03.16). It is not needed to compute `sd`; the model output is final.
 - Rescaling by the particle size `L` stays with the caller (spec 01 R01.7).
 
 ### R03.3 Sign invariance and normalization *(S03.2)* [3]
@@ -140,12 +146,13 @@ Each run SHALL report, on the validation set:
 
 - Each run SHALL write a new folder `interactions/ss_cube-wall/output/run_XXX/`
   and never overwrite (spec 04 layout).
-- Contents: the TorchScript model (float64), the network `state_dict`, and a
+- Contents: the TorchScript model (float64), the network `state_dict`,
+  `scalers.dat` (R03.16, *[changed 2026-10-04, S03.10]*), and a
   machine-readable run record holding: dataset path and sha256, git commit
   and dirty flag, Python/NumPy/PyTorch versions, device, seeds, all
   hyperparameters, the loss curve, the metrics of R03.8, start and end time
-  in UTC, spec revisions.
-- No joblib files and no separate scaler file (S03.5).
+  in UTC, spec revisions, and the sha256 of each artifact file.
+- No joblib files (S03.5).
 
 ### R03.12 Cost [12]
 
@@ -170,6 +177,23 @@ Each run SHALL report, on the validation set:
 - Training SHALL be callable for a given dataset and configuration and
   return the run folder and metrics, so spec 07 can run it on several
   dataset sizes.
+
+### R03.16 `scalers.dat` for C++ *[new 2026-10-04, S03.10, user: option A]*
+
+- Each run SHALL write `scalers.dat`, plain text, next to `model.pt`.
+- Its values SHALL equal the scaling and constants stored inside the
+  exported model (checked by a test).
+- It SHALL be readable by the existing key/value C++ loader of the
+  reference code: a key line followed by a value line; keys `y_mean`,
+  `y_scale`, `eps` present; `y_scale != 0`; other keys allowed (ignored by
+  that loader).
+- It SHALL carry a format version and state what the scaling applies to,
+  so it cannot be mistaken for the old log-transform file.
+- Floating-point values SHALL be written with 17 significant digits (exact
+  float64 round trip).
+- The model output `sd` is final. C++ code SHALL NOT apply `scalers.dat`
+  values to the model output a second time. (Constraint for spec 06.)
+- Exact layout: design decision D03.1.
 
 ## Numerical and physical requirements
 

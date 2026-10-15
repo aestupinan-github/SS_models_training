@@ -3,7 +3,22 @@
 ## Status
 
 **DRAFT, revision 2, 2026-10-04. Not approved.** Follows `requirements.md`
-revision 2 (approved 2026-10-04). Supersedes design revision 1 (git history).
+revision 2 (approved 2026-10-04, amended the same day for `scalers.dat`,
+S03.10). Supersedes design revision 1 (git history).
+
+### Decisions
+
+- **D03.1 `scalers.dat` layout (agent, delegated by the user 2026-10-04:
+  "I'll let you decide").** Key/value lines in the layout of the reference
+  C++ loader (`inspired_codes/CPP_test/test_surrogate_*.cpp`, read
+  2026-10-04: it reads a key line then a value line, in any order; requires
+  `y_mean` and `y_scale`, rejects `y_scale == 0`; `eps` optional; unknown
+  keys ignored). So one file is readable by that loader and also documents
+  the new interface. `eps` is written as `0` (no log transform). Extra keys
+  give the format version, what the scaling applies to, the input order and
+  the model constants. Reason: no new parser needed in C++, and the file
+  states plainly that the old inverse transform does not apply. Alternative
+  (a new format, e.g. JSON) rejected: the existing loader could not read it.
 
 ## Requirements traceability
 
@@ -17,6 +32,7 @@ revision 2 (approved 2026-10-04). Supersedes design revision 1 (git history).
 | Loss and training loop | R03.7, R03.10, R03.12, R03.13, R03.14 |
 | Metrics, incl. tumbling path | R03.8 |
 | Run writer and run record | R03.11, R03.13 |
+| `scalers.dat` writer (D03.1) | R03.16 |
 | `train()` entry point and CLI | R03.15 |
 
 ## Existing code context
@@ -48,7 +64,7 @@ revision 2 (approved 2026-10-04). Supersedes design revision 1 (git history).
 
 | File | Responsibility | Change |
 |---|---|---|
-| `interactions/ss_cube-wall/python/surrogate_model.py` | `UFeature`, `HNet`, `SurrogateModel`, status codes, export | New |
+| `interactions/ss_cube-wall/python/surrogate_model.py` | `UFeature`, `HNet`, `SurrogateModel`, status codes, export, `scalers.dat` writer and reader | New |
 | `interactions/ss_cube-wall/python/train_surrogate.py` | Config, loader, split, loss, loop, metrics, run writer, `train()`, CLI | New |
 | `tests/test_surrogate_model.py` | Model and interface tests | New |
 | `tests/test_train_surrogate.py` | Training pipeline tests | New |
@@ -75,7 +91,7 @@ Algorithm (all float64):
 valid  = all(isfinite(x), axis=1) and |q| > 0
 q      = q / |q|                         (rows not valid: replaced by (1,0,0,0) for computation only)
 u      = -(third row of R(q))            = -(2(xz - wy), 2(yz + wx), 1 - 2(x^2 + y^2))
-h_pred = HNet(u)                         (u scaled inside HNet if a scaling is used)
+h_pred = HNet(u) = y_scale * MLP(u) + y_mean     (y_mean, y_scale fixed buffers)
 sd     = position_z - h_pred
 far    = position_z > Z_PREFILTER        ; sd[far] = position_z - R_CIRC
 status = in_range; too_deep where sd < -0.1 (not far); far; invalid where not valid (sd = NaN)
@@ -83,7 +99,46 @@ status = in_range; too_deep where sd < -0.1 (not far); far; invalid where not va
 
 Constants `R_CIRC`, `Z_PREFILTER`, the `-0.1` bound are stored as module
 attributes, taken from `cube_wall` at build time, and recorded in the run
-record. The network is evaluated for every row (vectorized); `far` rows
+record and in `scalers.dat`.
+
+### `scalers.dat` (R03.16, D03.1)
+
+Output scaling: `y_mean`, `y_scale` are the mean and standard deviation of
+`h` over the training orientations (training split only), fixed before
+training and stored as `HNet` buffers. The MLP learns the scaled target
+`(h - y_mean) / y_scale`; `HNet` undoes it, so the model output is final.
+No input scaling: `u` is a unit vector.
+
+```
+format
+ss_scalers_v1
+y_mean
+<17 significant digits>
+y_scale
+<17 significant digits>
+eps
+0
+applies_to
+h_inside_model_output_sd_is_final
+inputs
+position_z qw qx qy qz
+outputs
+sd status
+r_circ
+<17 significant digits>
+z_prefilter
+<17 significant digits>
+sd_too_deep
+-0.1
+status_codes
+0_in_range 1_far 2_too_deep 3_invalid
+```
+
+Written by `write_scalers(model, path)`; `read_scalers(path)` parses it
+the same way as the reference loader (key line, value line, unknown keys
+kept) and is used by the tests. Warning recorded for spec 06: the reference
+C++ code computes `10^(pred * y_scale + y_mean) - eps`; with this model that
+would be wrong, because `sd` is already final. The network is evaluated for every row (vectorized); `far` rows
 overwrite the result. This meets R03.4 "SHALL NOT need the network" because
 the result for `far` rows does not depend on it.
 
@@ -180,6 +235,7 @@ No pass/fail thresholds (tolerances open until the baseline).
 run_XXX/
   model.pt          # TorchScript SurrogateModel, float64
   state_dict.pth    # HNet weights (float32 training copy)
+  scalers.dat       # plain-text copy of scaling and constants (R03.16, D03.1)
   run.json          # record (below)
 ```
 
@@ -192,8 +248,8 @@ MEMORY).
   dataset path, its `data.npz` sha256 and its provenance seed; split id
   hashes; model constants; parameter count; loss curve (train and
   validation per epoch); epochs run and stop reason; metrics; UTC start and
-  end; sha256 of `model.pt` and `state_dict.pth`; label "SMOKE" when within
-  smoke limits.
+  end; sha256 of `model.pt`, `state_dict.pth` and `scalers.dat`; label
+  "SMOKE" when within smoke limits.
 
 ## Error handling
 
@@ -215,6 +271,7 @@ MEMORY).
 | Status: `far` above `Z_PREFILTER` with `sd = z - R_CIRC`; `too_deep`; `invalid` with NaN; mixed batch; batch of one; `z = Z_PREFILTER` is `in_range` | R03.4 |
 | `sd = z - h_pred` exactly (slope 1) | R03.1 |
 | Float64 export equals float32 network within 1e-6 | R03.9 |
+| `scalers.dat`: values equal model buffers and constants exactly; reader mimicking the reference loader finds `y_mean`, `y_scale`, `eps`, ignores unknown keys; `y_scale != 0`; 17-digit round trip | R03.16 |
 | Loader: checksum mismatch, missing file, missing column raise `DatasetError` | R03.5, R03.13 |
 | Split: disjoint orientation sets, fraction, reproducible | R03.6 |
 | Config validation and smoke limits | R03.12, R03.14 |

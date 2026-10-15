@@ -111,9 +111,10 @@
   `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
   **Now:** spec 03 (training) revision in progress. Decisions approved by
   the user 2026-10-04 (see "Spec 03 decisions", incl. S03.9 output
-  conventions); requirements rev 2 APPROVED (2026-10-04, "ok"). Design
-  and tasks rev 2 written as DRAFT (7 tasks T03.1-T03.7), awaiting user
-  approval. No training code yet. Feasibility probe (2026-10-04, not a
+  conventions); requirements rev 2 APPROVED (2026-10-04, "ok"), amended
+  the same day for `scalers.dat` (S03.10, D03.1; amendment approved).
+  Design and tasks rev 2 written as DRAFT (7 tasks T03.1-T03.7), updated for
+  `scalers.dat`, awaiting user approval. No training code yet. Feasibility probe (2026-10-04, not a
   result): TorchScript export with status codes works; q/-q bit-identical
   on 1e5 random q; float32 vs float64 h difference 5.2e-7; 20 s CPU fit on
   1000 orientations gave validation |h| error median 6.5e-3 (pipeline
@@ -164,9 +165,10 @@ slower than float32 (267 vs 7900 GFLOP/s).
 - **S03.4 Precision.** Train in float32 on the GPU. Exported model holds
   float64 weights and computes `u`, `h`, `z - h` in float64; float32 vs
   float64 difference reported. Fixes 7.
-- **S03.5 Single-file interface.** No joblib, no `scalers.dat`; any
-  scaling lives inside the TorchScript model; a JSON sidecar holds
-  provenance and metrics. Fixes 8 (constitution 13).
+- **S03.5 Single-file interface.** No joblib; any scaling lives inside the
+  TorchScript model; a JSON sidecar holds provenance and metrics. Fixes 8
+  (constitution 13). *Amended by S03.10 (2026-10-04): `scalers.dat` is
+  written as an informational copy.*
 - **S03.6 Split specs.** Spec 03 = training pipeline. New spec 07
   (`07-ss_cube-wall-learning-curve`) = learning-curve study, which feeds
   T02.9. Fixes 11, 12.
@@ -193,15 +195,33 @@ slower than float32 (267 vs 7900 GFLOP/s).
   file, no `scalers.dat`). Reference: `inspired_codes/CPP_test/*.cpp` read
   `scalers.dat` (keys `y_mean`, `y_scale`, `eps`, one value per line after
   each key) and apply the inverse scaling in C++ after the model call.
-  Decision pending (how the file relates to the model: informational copy
-  vs C++ applies it); then requirements, design, tasks are updated in that
-  order. Spec 03 design and tasks are not approved yet.
+  **Resolved 2026-10-04:**
+- **S03.10 (user, 2026-10-04: "lets go for A"; amendment "ok").** Option
+  A: the TorchScript model still does the whole computation and returns the
+  final `sd`; `scalers.dat` is written next to it as a plain-text, versioned
+  copy of the scaling and constants inside the model. Amends S03.5 ("no
+  scalers.dat" removed; "no joblib" kept). Requirements R03.2, R03.11
+  changed, R03.16 added. Options B (C++ applies the scaling) and C (both)
+  rejected: logic split between model and C++, risk of wrong scaling.
+- **D03.1 (agent; user: "I'll let you decide").** `scalers.dat` uses the
+  key/value layout of the reference C++ loader (read 2026-10-04: key line
+  then value line, any order, requires `y_mean` and `y_scale`, rejects
+  `y_scale == 0`, `eps` optional, unknown keys ignored). Keys: `format`
+  (`ss_scalers_v1`), `y_mean`, `y_scale` (mean and std of `h` on the
+  training split, stored as model buffers), `eps` = 0 (no log transform),
+  `applies_to` (h inside model; output sd is final), `inputs`, `outputs`,
+  `r_circ`, `z_prefilter`, `sd_too_deep`, `status_codes`. 17 significant
+  digits. **Warning:** the reference C++ code computes
+  `10^(pred*y_scale + y_mean) - eps`; with the new model that is wrong,
+  because `sd` is already final (constraint for spec 06).
 
 ## Side effects for later (recorded 2026-10-04)
 
 - **Spec 06 (C++ test)** still describes the old transform
-  (`10^pred - EPS`), `scalers.dat` and a clamp to `[-0.5, 0.1]`. Must be
-  revised to the single-file TorchScript interface with status code (S03.5).
+  (`10^pred - EPS`), `scalers.dat` as an input to an inverse transform, and a
+  clamp to `[-0.5, 0.1]`. Must be revised to the TorchScript interface with
+  status code: use `sd` directly, read `scalers.dat` only for information or
+  for a consistency check, never apply it to the output (S03.10, D03.1).
 - **Spec 04 (evaluation)** artifact layout (`run_XXX`) is referenced by spec
   03; it must also gain the R01.17/R01.18 metrics and the tumbling-path test,
   define "off-anchor", and use spec 02's exclusion by `u` for held-out sets.
@@ -305,6 +325,8 @@ slower than float32 (267 vs 7900 GFLOP/s).
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: `scalers.dat` change request resolved: option A (S03.10, user) and file layout D03.1 (agent, delegated). Spec 03 requirements amended (R03.2, R03.11, R03.16), design and tasks updated; spec 06 side effect updated.
 
 - 2026-10-04: Spec 03 requirements rev 2 approved; design and tasks rev 2 drafted (7 tasks); feasibility probe recorded (not a result).
 
