@@ -46,6 +46,13 @@
   time: `z / L_actual` in, `sd * L_actual` out (spec 01).
 - `inspired_codes/` holds prior reference scripts. Inspiration only, partly
   unfinished, not imported at runtime, to be reviewed later.
+- **The old model is only a reference (Confirmed, user, 2026-10-04):** "the
+  old model is only a reference for you to know what I did before. I'm
+  trying to create something more robust and accurate." Consequence: no
+  requirement or design choice may exist only to stay compatible with the
+  old code (formats, loaders, transforms). D03.1 and R03.16 currently tie
+  `scalers.dat` to the old C++ loader; a revision is proposed (pending user
+  approval).
 - Code that exists: `interactions/ss_cube-wall/python/cube_wall.py`
   (spec 01 reference solution and contract helpers),
   `interactions/ss_cube-wall/python/smoke_contract.py` (contract smoke test),
@@ -325,6 +332,8 @@ slower than float32 (267 vs 7900 GFLOP/s).
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: User clarified that the old model is only a reference; recorded under Confirmed facts. Revision of D03.1/R03.16 (drop compatibility with the old C++ loader) proposed, pending approval.
 
 - 2026-10-04: `scalers.dat` change request resolved: option A (S03.10, user) and file layout D03.1 (agent, delegated). Spec 03 requirements amended (R03.2, R03.11, R03.16), design and tasks updated; spec 06 side effect updated.
 
