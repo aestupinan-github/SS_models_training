@@ -111,8 +111,13 @@
   `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
   **Now:** spec 03 (training) revision in progress. Decisions approved by
   the user 2026-10-04 (see "Spec 03 decisions", incl. S03.9 output
-  conventions); requirements rev 2 written as DRAFT with R03.4 resolved,
-  awaiting explicit user approval. Design and tasks not yet revised.
+  conventions); requirements rev 2 APPROVED (2026-10-04, "ok"). Design
+  and tasks rev 2 written as DRAFT (7 tasks T03.1-T03.7), awaiting user
+  approval. No training code yet. Feasibility probe (2026-10-04, not a
+  result): TorchScript export with status codes works; q/-q bit-identical
+  on 1e5 random q; float32 vs float64 h difference 5.2e-7; 20 s CPU fit on
+  1000 orientations gave validation |h| error median 6.5e-3 (pipeline
+  learns; accuracy is for spec 07).
 - Spec 04, 05, 06: still revision 1, to be revised (see "Side effects for
   later").
 - Pending: spec 04 (off-anchor definition, invariance tests, tumbling-path
@@ -288,6 +293,8 @@ slower than float32 (267 vs 7900 GFLOP/s).
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: Spec 03 requirements rev 2 approved; design and tasks rev 2 drafted (7 tasks); feasibility probe recorded (not a result).
 
 - 2026-10-04: Spec 03 R03.4 open questions resolved with the agent's proposals (user: first try), recorded as S03.9; requirements still DRAFT pending approval.
 

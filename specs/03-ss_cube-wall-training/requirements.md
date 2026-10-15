@@ -2,7 +2,7 @@
 
 ## Status
 
-**DRAFT, revision 2, 2026-10-04. Not approved.** Supersedes revision 1 (git
+**Revision 2, 2026-10-04. APPROVED by the user (2026-10-04, "ok").** Supersedes revision 1 (git
 history). Built on the decisions approved by the user on 2026-10-04
 (S03.1-S03.8 in `MEMORY.md`, "Spec 03 decisions"). R03.4 output conventions
 confirmed by the user for a first try (2026-10-04). Review issue numbers are
