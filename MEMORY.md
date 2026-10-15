@@ -203,7 +203,11 @@ slower than float32 (267 vs 7900 GFLOP/s).
   spec 07's result and the `--m-min` CLI option.
 - **`.gitignore`/`.gitkeep`** (review A5): `output/run_XXX/` artifacts are
   not covered by the current ignore patterns (`output/*.pt` only matches the
-  top level); fix before the first training run writes artifacts.
+  top level); fix before the first training run writes artifacts (planned
+  in T03.6).
+- **Spec 04 artifact layout** (`run_XXX/models, configs, logs, results`) is
+  replaced in the spec 03 design by a flat `run_XXX/{model.pt,
+  state_dict.pth, run.json}`; revise spec 04 accordingly.
 
 ## Decisions and rationale
 
