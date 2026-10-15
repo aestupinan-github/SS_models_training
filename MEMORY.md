@@ -188,6 +188,14 @@ slower than float32 (267 vs 7900 GFLOP/s).
   `too_deep` from predicted `sd` only (limitation). First try: revisit after
   the first LIGGGHTS trial.
 - Still open: metric tolerances, set by the user after the baseline.
+- **Change request (user, 2026-10-04): "we'll need the scalers.dat for later
+  use the model in cpp".** Conflicts with S03.5 / R03.2 / R03.11 (single
+  file, no `scalers.dat`). Reference: `inspired_codes/CPP_test/*.cpp` read
+  `scalers.dat` (keys `y_mean`, `y_scale`, `eps`, one value per line after
+  each key) and apply the inverse scaling in C++ after the model call.
+  Decision pending (how the file relates to the model: informational copy
+  vs C++ applies it); then requirements, design, tasks are updated in that
+  order. Spec 03 design and tasks are not approved yet.
 
 ## Side effects for later (recorded 2026-10-04)
 
