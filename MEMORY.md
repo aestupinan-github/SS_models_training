@@ -95,24 +95,109 @@
   6.7e-16, smallest coverage cell 584 rows); independent check vs
   `cube_wall.compute_signed_distance`: error 0.0. It is a software check,
   not a training dataset and not a scientific result.
-  **Remaining in spec 02:** user approval of spec 02 as complete; T02.9
-  full-scale generation only after the spec 03 learning-curve study and
-  explicit user approval.
+  **Spec 02 status: implemented (T02.1-T02.8), NOT complete.** It cannot be
+  approved as complete while T02.9 is open (user, 2026-10-04: "we are not
+  ready for approving spec 2"). T02.9 full-scale generation comes only after
+  the spec 03 learning-curve study and explicit user approval; spec 02
+  approval follows T02.9.
   **T02.9 BLOCKED (checked 2026-10-04, not executed, nothing generated).**
   Unblock needs: (1) spec 03 revised and approved incl. the learning-curve
   study; (2) the study run (own approval) and reviewed; (3) user decisions
   `N_orient`, `K` (D02.4: `K >= 50` for stratified parts), seed, `M_min`
-  (R02.5, OPEN); (4) small approved prerequisite: add `--m-min` to the CLI
-  (currently missing, so a CLI run would use `M_min = 1`), tests first;
-  (5) explicit approval to run with `--allow-full-scale`. Size estimate:
-  about 74 bytes per row in `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
-  **Next (needs user decision):** revise spec 03 (training) before any
-  training work. Pending items listed below.
-- Spec 03, 04, 06: still revision 1, to be revised.
-- Pending: spec 03 (replace transform, Option B, orientation-based split,
-  learning-curve study, sign-invariant input, mini-batch training), spec 04
-  (off-anchor definition, invariance tests, tumbling-path test for
-  continuity and sign safety), spec 06, `.gitignore`/`.gitkeep`.
+  (R02.5, OPEN); (4) add `--m-min` to the CLI as the first step of T02.9
+  (agreed 2026-10-04: not urgent, smoke datasets use 1; currently missing,
+  so a CLI run would use `M_min = 1`), tests first; (5) explicit approval to
+  run with `--allow-full-scale`. Size estimate: about 74 bytes per row in
+  `data.npz` (1e7 rows ≈ 0.74 GB); 204 GB free.
+  **Now:** spec 03 (training) revision in progress. Decisions approved by
+  the user 2026-10-04 (see "Spec 03 decisions"); requirements rev 2 written
+  as DRAFT, awaiting user review. Design and tasks not yet revised.
+- Spec 04, 05, 06: still revision 1, to be revised (see "Side effects for
+  later").
+- Pending: spec 04 (off-anchor definition, invariance tests, tumbling-path
+  test for continuity and sign safety), spec 06, `.gitignore`/`.gitkeep`.
+
+## Spec 03 review (2026-10-04, findings)
+
+Measured: old transform round-trip error 1.9e8 on dataset_001 (not
+invertible); spec 03 expects CSV column `signed_distance`, spec 02 delivers
+`.npz` with `sd`; GPU available (NVIDIA RTX A4000, torch 2.12.1+cu130, works
+despite an NVML warning); scikit-learn 1.9.0 installed.
+Main problems: (1) transform not invertible and jumps at contact; (2)
+learning target undecided (Option B: learn h(q), sd = z - h); (3) 5-input
+quaternion model conflicts with R01.18 (q / -q identical); (4) row-wise
+80/20 split leaks orientations (use `orientation_id`); (5) loss and metrics
+not physical; no R01.15/R01.17/R01.18 metrics; no zone treatment (gap
+safety needs only the sign); (6) hyperparameters and "reuse existing
+architecture" written as requirements, from unverified prior work; (7)
+precision unspecified (float32 spacing 6e-8); (8) joblib scalers conflict
+with constitution 13; `scalers.dat` unversioned and tied to the old `eps`;
+(9) rescaling, pre-filter and `too_deep` reporting (R01.13) not addressed;
+(10) export interface, training provenance, determinism on GPU, smoke-run
+limits, error handling missing; (11) learning-curve study missing; (12) 12
+tasks (> 10): consider splitting; (13) SDD template sections missing.
+
+## Spec 03 decisions (approved by the user 2026-10-04, "go on")
+
+Supporting measurements (2026-10-04): in dataset_001 `h` is identical for
+all K rows of an orientation (1250 distinct targets in 10000 rows);
+`u = third row of R(q)` is a quadratic in q, identical for q and -q, and
+reproduces the stored h to 7.8e-16; RTX A4000 float64 matmul about 30x
+slower than float32 (267 vs 7900 GFLOP/s).
+
+- **S03.1 Target (Option B).** The network learns `h(q)`; the model
+  outputs `sd = position_z - h_pred(q)` (exact slope 1 in z). No log
+  transform. Fixes review issues 1, 2.
+- **S03.2 Input.** External input stays `[position_z, qw, qx, qy, qz]`. A
+  fixed first layer computes `u(q)` (generic rotation maths, no shape
+  geometry); the network sees only `u`. `q` and `-q` give identical output
+  (R01.18). Still a fully trained model, not vertex embedding. Fixes 3.
+- **S03.3 Hyperparameters** move from requirements to design as starting
+  values (MLP with smooth activation, Adam, mini-batches; SIREN one
+  option). Fixes 6.
+- **S03.4 Precision.** Train in float32 on the GPU. Exported model holds
+  float64 weights and computes `u`, `h`, `z - h` in float64; float32 vs
+  float64 difference reported. Fixes 7.
+- **S03.5 Single-file interface.** No joblib, no `scalers.dat`; any
+  scaling lives inside the TorchScript model; a JSON sidecar holds
+  provenance and metrics. Fixes 8 (constitution 13).
+- **S03.6 Split specs.** Spec 03 = training pipeline. New spec 07
+  (`07-ss_cube-wall-learning-curve`) = learning-curve study, which feeds
+  T02.9. Fixes 11, 12.
+- **S03.7** Contact point and normal stay deferred; outputs are `sd` and a
+  status code.
+- **S03.8** The first training run uses `dataset_001` (10000 rows) as a
+  smoke test only; real training waits for spec 07 and approval.
+- Further fixes adopted with these: split by `orientation_id` (4);
+  physical metrics per zone and decade, sign-error and continuity metrics,
+  tolerances set by the user after the baseline (5); pre-filter and
+  `too_deep` status inside the exported model, rescaling by `L` stays with
+  the caller (9); read spec 02 `.npz` and its `h`, `sd`, `orientation_id`
+  (10); provenance, determinism, smoke limits, `run_XXX` folders, error
+  handling (12); full SDD template (13).
+- Open questions in the draft (for the user): status code values
+  (0 in range, 1 far, 2 too deep, 3 invalid quaternion); `sd` returned when
+  far (`z - R_CIRC`, a guaranteed lower bound) or `+inf`; `sd` NaN with
+  status 3 when invalid; `too_deep` detected only from predicted `sd`
+  (limitation).
+
+## Side effects for later (recorded 2026-10-04)
+
+- **Spec 06 (C++ test)** still describes the old transform
+  (`10^pred - EPS`), `scalers.dat` and a clamp to `[-0.5, 0.1]`. Must be
+  revised to the single-file TorchScript interface with status code (S03.5).
+- **Spec 04 (evaluation)** artifact layout (`run_XXX`) is referenced by spec
+  03; it must also gain the R01.17/R01.18 metrics and the tumbling-path test,
+  define "off-anchor", and use spec 02's exclusion by `u` for held-out sets.
+- **Spec 05** uses `07-ss_pyramid-wall-...` as an example spec name;
+  update it when spec 07 (learning curve) is created.
+- **Spec 02** stays "implemented, not complete" until T02.9, which needs
+  spec 07's result and the `--m-min` CLI option.
+- **`.gitignore`/`.gitkeep`** (review A5): `output/run_XXX/` artifacts are
+  not covered by the current ignore patterns (`output/*.pt` only matches the
+  top level); fix before the first training run writes artifacts.
+
+## Decisions and rationale
 
 ## Decisions and rationale
 
@@ -200,6 +285,10 @@
   approval. Exit 0 written, 2 invalid input, 1 failure.
 
 ## Recent changes
+
+- 2026-10-04: Spec 03 decisions S03.1-S03.8 approved by the user and recorded; side effects for specs 04, 05, 06, 02 and `.gitignore` recorded; spec 03 requirements rev 2 written as DRAFT.
+
+- 2026-10-04: MEMORY corrected: spec 02 is implemented but not complete (approval after T02.9, which waits for spec 03); `--m-min` deferred to T02.9. Spec 03 revision started: review findings recorded; no spec 03 file changed.
 
 - 2026-10-04: T02.9 requested; not executed because its approved precondition (spec 03 learning-curve study and user approval of sizes) is not met. Blockers, a missing `--m-min` CLI option, and a size estimate recorded in spec 02 tasks.md and here. No code or data changes.
 
